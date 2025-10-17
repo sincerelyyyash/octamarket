@@ -7,20 +7,30 @@ use crate::sources::{augur::AugurSource, kalshi::KalshiSource, polymarket::Polym
 
 pub struct IndexerPipeline {
     cfg: AppConfig,
+    kafka: KafkaClient,
+    redis: RedisClient,
+    postgres: PostgresClient,
 }
 
 impl IndexerPipeline {
     pub async fn new(cfg: AppConfig) -> anyhow::Result<Self> {
-        // Build clients and ensure schema; keep them in tasks as needed later
-        let pg = PostgresClient::new(&cfg.postgres_url).await?;
-        pg.ensure_schema().await?;
-        let _kafka = KafkaClient::new(&cfg.kafka_brokers)?;
-        let _redis = RedisClient::new(&cfg.redis_url).await?;
-        Ok(Self { cfg })
+
+        let postgres = PostgresClient::new(&cfg.postgres_url).await?;
+        postgres.ensure_schema().await?;
+        let kafka = KafkaClient::new(&cfg.kafka_brokers)?;
+        let redis = RedisClient::new(&cfg.redis_url).await?;
+        
+        Ok(Self { 
+            cfg,
+            kafka,
+            redis,
+            postgres,
+        })
     }
 
-    pub async fn run_all(&self) -> anyhow::Result<()> {
+    pub async fn run_all(&mut self) -> anyhow::Result<()> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<MarketEvent>(1024);
+        let mut backpressure_count = 0;
 
         let sources: Vec<Box<dyn Source>> = vec![
             Box::new(PolymarketSource::new()),
@@ -40,33 +50,57 @@ impl IndexerPipeline {
         }
         drop(tx);
 
-        let kafka = KafkaClient::new(&self.cfg.kafka_brokers)?;
-        let mut redis = RedisClient::new(&self.cfg.redis_url).await?;
         let mut fingerprinter = EventFingerprinter::new();
 
         while let Some(mut evt) = rx.recv().await {
+            // Check for backpressure - if channel is getting full, slow down processing
+            if rx.len() > 800 {
+                backpressure_count += 1;
+                if backpressure_count % 100 == 0 {
+                    tracing::warn!("backpressure detected: {} events queued, processing may be slow", rx.len());
+                }
+                // Small delay to let the channel drain
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            } else {
+                backpressure_count = 0;
+            }
+
             // Generate fingerprint for event grouping
             if let Some(fingerprint) = fingerprinter.fingerprint(&evt) {
                 evt = evt.with_fingerprint(fingerprint);
             }
+            // Validate event data
+            if evt.market_id.is_empty() || evt.payload.is_null() {
+                tracing::warn!("skipping invalid event: empty market_id or null payload");
+                continue;
+            }
+
             // fanout to raw
             let key = &evt.market_id;
             let raw = serde_json::to_string(&evt)?;
-            kafka.send(&kafka.topic_raw, key, &raw).await.ok();
+            if let Err(e) = self.kafka.send(&self.kafka.topic_raw, key, &raw).await {
+                tracing::error!(error = %e, "failed to send to raw topic");
+            }
 
             // normalize and fanout
             let norm = normalize(&evt);
             let norm_json = serde_json::to_string(&norm)?;
-            kafka.send(&kafka.topic_normalized, key, &norm_json).await.ok();
+            if let Err(e) = self.kafka.send(&self.kafka.topic_normalized, key, &norm_json).await {
+                tracing::error!(error = %e, "failed to send to normalized topic");
+            }
 
             // simple heuristic: trades and orderbook -> realtime topic
             if matches!(evt.kind, crate::model::MarketEventKind::Trade | crate::model::MarketEventKind::OrderBook) {
-                kafka.send(&kafka.topic_realtime, key, &raw).await.ok();
+                if let Err(e) = self.kafka.send(&self.kafka.topic_realtime, key, &raw).await {
+                    tracing::error!(error = %e, "failed to send to realtime topic");
+                }
             }
 
             // cache latest normalized state per market
             let cache_key = format!("market:{}:latest", key);
-            let _ = redis.set_json(&cache_key, &serde_json::to_value(&norm)?).await;
+            if let Err(e) = self.redis.set_json(&cache_key, &serde_json::to_value(&norm)?).await {
+                tracing::error!(error = %e, "failed to cache market state");
+            }
         }
 
         Ok(())

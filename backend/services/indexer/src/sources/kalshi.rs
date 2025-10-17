@@ -21,20 +21,37 @@ impl crate::sources::Source for KalshiSource {
             req = req.header("X-API-KEY", key).header("X-API-SECRET", secret);
         }
         loop {
-            match req.try_clone().unwrap().send().await {
-                Ok(resp) => {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        let evt = MarketEvent::new(
-                            PlatformSource::Kalshi,
-                            MarketEventKind::MarketMetadata,
-                            "kalshi:markets".into(),
-                            json,
-                            OffsetDateTime::now_utc(),
-                        );
-                        let _ = tx.send(evt).await;
+            match req.try_clone() {
+                Some(cloned_req) => {
+                    match cloned_req.send().await {
+                        Ok(resp) => {
+                            if resp.status().is_success() {
+                                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                    let evt = MarketEvent::new(
+                                        PlatformSource::Kalshi,
+                                        MarketEventKind::MarketMetadata,
+                                        "kalshi:markets".into(),
+                                        json,
+                                        OffsetDateTime::now_utc(),
+                                    );
+                                    if let Err(e) = tx.send(evt).await {
+                                        tracing::error!(error = %e, "failed to send kalshi event");
+                                        return Ok(());
+                                    }
+                                } else {
+                                    tracing::warn!("failed to parse kalshi response as JSON");
+                                }
+                            } else {
+                                tracing::warn!("kalshi API returned status: {}", resp.status());
+                            }
+                        }
+                        Err(err) => tracing::warn!(error = %err, "kalshi rest request failed"),
                     }
                 }
-                Err(err) => tracing::warn!(error = %err, "kalshi rest request failed"),
+                None => {
+                    tracing::error!("failed to clone kalshi request");
+                    return Ok(());
+                }
             }
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         }

@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     let cfg = config::AppConfig::from_env()?;
 
     // Build pipeline (sources -> normalizer -> clients)
-    let pipeline = pipeline::IndexerPipeline::new(cfg).await?;
+    let mut pipeline = pipeline::IndexerPipeline::new(cfg).await?;
 
     // Run all sources
     pipeline.run_all().await?;
