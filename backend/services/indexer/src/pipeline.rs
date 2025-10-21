@@ -1,29 +1,21 @@
 use crate::config::AppConfig;
 use crate::fingerprint::EventFingerprinter;
 use crate::model::MarketEvent;
-use crate::normalizer::normalize;
-use crate::clients::{kafka::KafkaClient, postgres::PostgresClient, redis::RedisClient};
+use crate::clients::postgres::PostgresClient;
 use crate::sources::{augur::AugurSource, kalshi::KalshiSource, polymarket::PolymarketSource, thales::ThalesSource, omen::OmenSource, Source};
 
 pub struct IndexerPipeline {
     cfg: AppConfig,
-    kafka: KafkaClient,
-    redis: RedisClient,
     postgres: PostgresClient,
 }
 
 impl IndexerPipeline {
     pub async fn new(cfg: AppConfig) -> anyhow::Result<Self> {
-
         let postgres = PostgresClient::new(&cfg.postgres_url).await?;
         postgres.ensure_schema().await?;
-        let kafka = KafkaClient::new(&cfg.kafka_brokers)?;
-        let redis = RedisClient::new(&cfg.redis_url).await?;
         
         Ok(Self { 
             cfg,
-            kafka,
-            redis,
             postgres,
         })
     }
@@ -69,37 +61,23 @@ impl IndexerPipeline {
             if let Some(fingerprint) = fingerprinter.fingerprint(&evt) {
                 evt = evt.with_fingerprint(fingerprint);
             }
+            
             // Validate event data
             if evt.market_id.is_empty() || evt.payload.is_null() {
                 tracing::warn!("skipping invalid event: empty market_id or null payload");
                 continue;
             }
 
-            // fanout to raw
-            let key = &evt.market_id;
-            let raw = serde_json::to_string(&evt)?;
-            if let Err(e) = self.kafka.send(&self.kafka.topic_raw, key, &raw).await {
-                tracing::error!(error = %e, "failed to send to raw topic");
-            }
-
-            // normalize and fanout
-            let norm = normalize(&evt);
-            let norm_json = serde_json::to_string(&norm)?;
-            if let Err(e) = self.kafka.send(&self.kafka.topic_normalized, key, &norm_json).await {
-                tracing::error!(error = %e, "failed to send to normalized topic");
-            }
-
-            // simple heuristic: trades and orderbook -> realtime topic
-            if matches!(evt.kind, crate::model::MarketEventKind::Trade | crate::model::MarketEventKind::OrderBook) {
-                if let Err(e) = self.kafka.send(&self.kafka.topic_realtime, key, &raw).await {
-                    tracing::error!(error = %e, "failed to send to realtime topic");
-                }
-            }
-
-            // cache latest normalized state per market
-            let cache_key = format!("market:{}:latest", key);
-            if let Err(e) = self.redis.set_json(&cache_key, &serde_json::to_value(&norm)?).await {
-                tracing::error!(error = %e, "failed to cache market state");
+            // Store or update event in PostgreSQL with aggregation logic
+            if let Err(e) = self.postgres.store_or_update_event(&evt).await {
+                tracing::error!(error = %e, "failed to store event to database");
+            } else {
+                tracing::debug!(
+                    source = %evt.source,
+                    market_id = %evt.market_id,
+                    fingerprint = ?evt.event_fingerprint,
+                    "successfully processed event"
+                );
             }
         }
 
