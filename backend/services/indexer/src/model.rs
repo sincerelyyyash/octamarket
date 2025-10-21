@@ -70,4 +70,33 @@ pub struct NormalizedMarketEvent {
     pub event_fingerprint: Option<String>, // Groups markets for same underlying event
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregatedEvent {
+    pub id: Uuid,
+    pub event_fingerprint: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub end_time: Option<OffsetDateTime>,
+    pub status: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub market_sources: Vec<MarketSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketSource {
+    pub id: Uuid,
+    pub source: PlatformSource,
+    pub market_id: String,
+    pub market_slug: Option<String>,
+    pub name: Option<String>,
+    pub status: Option<String>,
+    pub outcomes: Option<Vec<String>>,
+    pub prices: Option<Vec<f64>>,
+    pub traded_amount: Option<f64>,
+    pub resolved_outcome: Option<String>,
+    pub observed_at: OffsetDateTime,
+    pub raw_payload: serde_json::Value,
+}
+
 
