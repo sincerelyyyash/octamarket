@@ -4,7 +4,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 mod config;
 mod fingerprint;
 mod model;
-mod normalizer;
 mod pipeline;
 mod clients;
 mod sources;

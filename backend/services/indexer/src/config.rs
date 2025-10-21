@@ -4,8 +4,6 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
-    pub kafka_brokers: String,
-    pub redis_url: String,
     pub postgres_url: String,
 
     // API keys / auth
@@ -17,8 +15,6 @@ impl AppConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let cfg = config::Config::builder()
             .add_source(config::Environment::default().separator("__"))
-            .set_default("kafka_brokers", "localhost:9092")?
-            .set_default("redis_url", "redis://127.0.0.1:6379")?
             .set_default("postgres_url", "postgres://postgres:postgres@localhost:5432/indexer")?
             .build()
             .context("building config from environment")?;
