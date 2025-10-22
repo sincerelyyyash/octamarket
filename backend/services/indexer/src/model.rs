@@ -97,6 +97,48 @@ pub struct MarketSource {
     pub resolved_outcome: Option<String>,
     pub observed_at: OffsetDateTime,
     pub raw_payload: serde_json::Value,
+    pub price_history: Option<Vec<PriceHistoryEntry>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PriceHistoryEntry {
+    pub id: Uuid,
+    pub market_source_id: Uuid,
+    pub outcome_index: i32,
+    pub outcome_name: String,
+    pub price: f64,
+    pub volume: Option<f64>,
+    pub timestamp: OffsetDateTime,
+    pub source_data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventPriceData {
+    pub event_fingerprint: String,
+    pub event_title: String,
+    pub source: String,
+    pub market_id: String,
+    pub market_name: Option<String>,
+    pub prices: Option<serde_json::Value>,
+    pub outcomes: Option<serde_json::Value>,
+    pub observed_at: OffsetDateTime,
+    pub traded_amount: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PriceSnapshot {
+    pub timestamp: OffsetDateTime,
+    pub prices: Vec<OutcomePrice>,
+    pub volume: Option<f64>,
+    pub source: PlatformSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutcomePrice {
+    pub outcome_name: String,
+    pub outcome_index: i32,
+    pub price: f64,
+    pub volume: Option<f64>,
 }
 
 

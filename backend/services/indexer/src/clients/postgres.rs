@@ -6,8 +6,9 @@ use crate::model::{MarketEvent, PlatformSource};
 use uuid::Uuid;
 use time::OffsetDateTime;
 
+#[derive(Clone)]
 pub struct PostgresClient {
-    pool: Pool<PostgresConnectionManager<NoTls>>,
+    pub pool: Pool<PostgresConnectionManager<NoTls>>,
 }
 
 impl PostgresClient {
@@ -52,12 +53,27 @@ impl PostgresClient {
                 created_at timestamptz NOT NULL DEFAULT NOW()
             );
 
+            -- Price history table for tracking price changes over time
+            CREATE TABLE IF NOT EXISTS price_history (
+                id uuid PRIMARY KEY,
+                market_source_id uuid NOT NULL REFERENCES market_sources(id) ON DELETE CASCADE,
+                outcome_index integer NOT NULL,
+                outcome_name text NOT NULL,
+                price numeric NOT NULL,
+                volume numeric,
+                timestamp timestamptz NOT NULL DEFAULT NOW(),
+                source_data jsonb
+            );
+
             -- Indexes for performance
             CREATE INDEX IF NOT EXISTS idx_aggregated_events_fingerprint ON aggregated_events(event_fingerprint);
             CREATE INDEX IF NOT EXISTS idx_aggregated_events_status ON aggregated_events(status);
             CREATE INDEX IF NOT EXISTS idx_market_sources_event_id ON market_sources(aggregated_event_id);
             CREATE INDEX IF NOT EXISTS idx_market_sources_source ON market_sources(source);
             CREATE INDEX IF NOT EXISTS idx_market_sources_market_id ON market_sources(market_id);
+            CREATE INDEX IF NOT EXISTS idx_price_history_market_source ON price_history(market_source_id);
+            CREATE INDEX IF NOT EXISTS idx_price_history_timestamp ON price_history(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_price_history_outcome ON price_history(outcome_index, outcome_name);
             
             -- Constraints to prevent data corruption
             ALTER TABLE market_sources 
@@ -183,6 +199,23 @@ impl PostgresClient {
                     &event.market_id
                 ]
             ).await?;
+            
+            // Store price history for the updated market source
+            if let (Some(prices), Some(outcomes)) = (
+                self.extract_prices_from_event(event),
+                self.extract_outcomes_from_event(event)
+            ) {
+                // Get the market source ID for price history
+                if let Ok(Some(row)) = conn.query_opt(
+                    "SELECT id FROM market_sources WHERE aggregated_event_id = $1 AND source = $2 AND market_id = $3",
+                    &[&aggregated_event_id, &event.source.to_string(), &event.market_id]
+                ).await {
+                    let market_source_id: Uuid = row.get(0);
+                    if let Err(e) = self.store_price_history(market_source_id, &prices, &outcomes, event.observed_at).await {
+                        tracing::warn!(error = %e, "failed to store price history for market source");
+                    }
+                }
+            }
         } else {
             // Insert new market source
             conn.execute(
@@ -208,6 +241,16 @@ impl PostgresClient {
                     &event.payload
                 ]
             ).await?;
+            
+            // Store price history for the new market source
+            if let (Some(prices), Some(outcomes)) = (
+                self.extract_prices_from_event(event),
+                self.extract_outcomes_from_event(event)
+            ) {
+                if let Err(e) = self.store_price_history(market_source_id, &prices, &outcomes, event.observed_at).await {
+                    tracing::warn!(error = %e, "failed to store price history for new market source");
+                }
+            }
         }
         
         Ok(())
@@ -333,13 +376,197 @@ impl PostgresClient {
     }
 
     fn extract_outcomes_from_event(&self, event: &MarketEvent) -> Option<serde_json::Value> {
-        event.payload.get("outcomes")
-            .map(|v| v.clone())
+        match event.source {
+            PlatformSource::Polymarket => {
+                event.payload.get("outcomes")
+                    .or_else(|| event.payload.get("outcome_tokens"))
+                    .or_else(|| {
+                        // Try to extract from orderbook data
+                        event.payload.get("orderbook")
+                            .and_then(|ob| ob.get("outcomes"))
+                    })
+                    .map(|v| v.clone())
+            },
+            PlatformSource::Augur => {
+                event.payload.get("data")
+                    .and_then(|d| d.get("markets"))
+                    .and_then(|m| m.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|market| market.get("outcomes"))
+                    .map(|outcomes| {
+                        if let Some(outcomes_array) = outcomes.as_array() {
+                            let outcome_names: Vec<String> = outcomes_array.iter()
+                                .filter_map(|outcome| outcome.get("name").and_then(|n| n.as_str()))
+                                .map(|s| s.to_string())
+                                .collect();
+                            if !outcome_names.is_empty() {
+                                return serde_json::Value::Array(
+                                    outcome_names.into_iter().map(|name| serde_json::Value::String(name)).collect()
+                                );
+                            }
+                        }
+                        outcomes.clone()
+                    })
+            },
+            PlatformSource::Kalshi => {
+                event.payload.get("data")
+                    .and_then(|d| d.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|market| market.get("outcomes"))
+                    .map(|outcomes| {
+                        if let Some(outcomes_array) = outcomes.as_array() {
+                            let outcome_names: Vec<String> = outcomes_array.iter()
+                                .filter_map(|outcome| outcome.get("name").and_then(|n| n.as_str()))
+                                .map(|s| s.to_string())
+                                .collect();
+                            if !outcome_names.is_empty() {
+                                return serde_json::Value::Array(
+                                    outcome_names.into_iter().map(|name| serde_json::Value::String(name)).collect()
+                                );
+                            }
+                        }
+                        outcomes.clone()
+                    })
+            },
+            PlatformSource::Thales => {
+                event.payload.get("data")
+                    .and_then(|d| d.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|market| market.get("outcomes"))
+                    .map(|outcomes| {
+                        if let Some(outcomes_array) = outcomes.as_array() {
+                            let outcome_names: Vec<String> = outcomes_array.iter()
+                                .filter_map(|outcome| outcome.get("name").and_then(|n| n.as_str()))
+                                .map(|s| s.to_string())
+                                .collect();
+                            if !outcome_names.is_empty() {
+                                return serde_json::Value::Array(
+                                    outcome_names.into_iter().map(|name| serde_json::Value::String(name)).collect()
+                                );
+                            }
+                        }
+                        outcomes.clone()
+                    })
+            },
+            PlatformSource::Omen => {
+                event.payload.get("data")
+                    .and_then(|d| d.get("markets"))
+                    .and_then(|m| m.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|market| market.get("outcomes"))
+                    .map(|outcomes| {
+                        if let Some(outcomes_array) = outcomes.as_array() {
+                            let outcome_names: Vec<String> = outcomes_array.iter()
+                                .filter_map(|outcome| outcome.get("name").and_then(|n| n.as_str()))
+                                .map(|s| s.to_string())
+                                .collect();
+                            if !outcome_names.is_empty() {
+                                return serde_json::Value::Array(
+                                    outcome_names.into_iter().map(|name| serde_json::Value::String(name)).collect()
+                                );
+                            }
+                        }
+                        outcomes.clone()
+                    })
+            },
+        }
     }
 
     fn extract_prices_from_event(&self, event: &MarketEvent) -> Option<serde_json::Value> {
-        event.payload.get("prices")
-            .map(|v| v.clone())
+        match event.source {
+            PlatformSource::Polymarket => {
+                // Polymarket prices can be in different formats
+                event.payload.get("prices")
+                    .or_else(|| event.payload.get("outcome_prices"))
+                    .map(|v| v.clone())
+            },
+            PlatformSource::Augur => {
+                event.payload.get("data")
+                    .and_then(|d| d.get("markets"))
+                    .and_then(|m| m.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|market| market.get("outcomes"))
+                    .and_then(|outcomes| {
+                        if let Some(outcomes_array) = outcomes.as_array() {
+                            let prices: Vec<f64> = outcomes_array.iter()
+                                .filter_map(|outcome| outcome.get("price").and_then(|p| p.as_f64()))
+                                .collect();
+                            if !prices.is_empty() {
+                                return Some(serde_json::Value::Array(
+                                    prices.into_iter().map(|p| serde_json::Value::Number(
+                                        serde_json::Number::from_f64(p).unwrap_or(serde_json::Number::from(0))
+                                    )).collect()
+                                ));
+                            }
+                        }
+                        None
+                    })
+            },
+            PlatformSource::Kalshi => {
+                event.payload.get("data")
+                    .and_then(|d| d.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|market| market.get("outcomes"))
+                    .and_then(|outcomes| {
+                        if let Some(outcomes_array) = outcomes.as_array() {
+                            let prices: Vec<f64> = outcomes_array.iter()
+                                .filter_map(|outcome| outcome.get("price").and_then(|p| p.as_f64()))
+                                .collect();
+                            if !prices.is_empty() {
+                                return Some(serde_json::Value::Array(
+                                    prices.into_iter().map(|p| serde_json::Value::Number(
+                                        serde_json::Number::from_f64(p).unwrap_or(serde_json::Number::from(0))
+                                    )).collect()
+                                ));
+                            }
+                        }
+                        None
+                    })
+            },
+            PlatformSource::Thales => {
+                event.payload.get("data")
+                    .and_then(|d| d.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|market| market.get("outcomes"))
+                    .and_then(|outcomes| {
+                        if let Some(outcomes_array) = outcomes.as_array() {
+                            let prices: Vec<f64> = outcomes_array.iter()
+                                .filter_map(|outcome| outcome.get("price").and_then(|p| p.as_f64()))
+                                .collect();
+                            if !prices.is_empty() {
+                                return Some(serde_json::Value::Array(
+                                    prices.into_iter().map(|p| serde_json::Value::Number(
+                                        serde_json::Number::from_f64(p).unwrap_or(serde_json::Number::from(0))
+                                    )).collect()
+                                ));
+                            }
+                        }
+                        None
+                    })
+            },
+            PlatformSource::Omen => {
+                event.payload.get("data")
+                    .and_then(|d| d.get("markets"))
+                    .and_then(|m| m.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|market| market.get("outcomes"))
+                    .and_then(|outcomes| {
+                        if let Some(outcomes_array) = outcomes.as_array() {
+                            let prices: Vec<f64> = outcomes_array.iter()
+                                .filter_map(|outcome| outcome.get("price").and_then(|p| p.as_f64()))
+                                .collect();
+                            if !prices.is_empty() {
+                                return Some(serde_json::Value::Array(
+                                    prices.into_iter().map(|p| serde_json::Value::Number(
+                                        serde_json::Number::from_f64(p).unwrap_or(serde_json::Number::from(0))
+                                    )).collect()
+                                ));
+                            }
+                        }
+                        None
+                    })
+            },
+        }
     }
 
     fn extract_traded_amount_from_event(&self, event: &MarketEvent) -> Option<f64> {
@@ -352,6 +579,211 @@ impl PostgresClient {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
+
+    // Store price history for a market source
+    pub async fn store_price_history(&self, market_source_id: Uuid, prices: &serde_json::Value, outcomes: &serde_json::Value, timestamp: OffsetDateTime) -> anyhow::Result<()> {
+        let conn = self.pool.get().await?;
+        
+        // Extract prices and outcomes based on platform
+        let price_data = self.extract_price_data_from_payload(prices, outcomes);
+        
+        for (index, price_entry) in price_data.iter().enumerate() {
+            let price_history_id = Uuid::new_v4();
+            
+            conn.execute(
+                r#"
+                INSERT INTO price_history (id, market_source_id, outcome_index, outcome_name, price, volume, timestamp, source_data)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                "#,
+                &[
+                    &price_history_id,
+                    &market_source_id,
+                    &(index as i32),
+                    &price_entry.outcome_name,
+                    &price_entry.price,
+                    &price_entry.volume,
+                    &timestamp.to_string(),
+                    &price_entry.source_data
+                ]
+            ).await?;
+        }
+        
+        Ok(())
+    }
+
+    // Get market source ID for a specific event
+    pub async fn get_market_source_id(&self, event: &MarketEvent) -> anyhow::Result<Option<Uuid>> {
+        let conn = self.pool.get().await?;
+        
+        if let Some(fingerprint) = &event.event_fingerprint {
+            let row = conn.query_opt(
+                r#"
+                SELECT ms.id FROM market_sources ms
+                JOIN aggregated_events ae ON ms.aggregated_event_id = ae.id
+                WHERE ae.event_fingerprint = $1 AND ms.source = $2 AND ms.market_id = $3
+                "#,
+                &[fingerprint, &event.source.to_string(), &event.market_id]
+            ).await?;
+            
+            if let Some(row) = row {
+                return Ok(Some(row.get("id")));
+            }
+        }
+        
+        Ok(None)
+    }
+
+
+    // Extract structured price data from platform-specific payloads
+    fn extract_price_data_from_payload(&self, prices: &serde_json::Value, outcomes: &serde_json::Value) -> Vec<PriceEntry> {
+        let mut price_entries = Vec::new();
+        
+        // Handle different price formats from different platforms
+        if let Some(prices_array) = prices.as_array() {
+            for (index, price_value) in prices_array.iter().enumerate() {
+                if let Some(price_num) = price_value.as_f64() {
+                    let outcome_name = outcomes
+                        .as_array()
+                        .and_then(|arr| arr.get(index))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&format!("Outcome {}", index + 1))
+                        .to_string();
+                    
+                    price_entries.push(PriceEntry {
+                        outcome_name,
+                        price: price_num,
+                        volume: None,
+                        source_data: serde_json::Value::Null,
+                    });
+                }
+            }
+        } else if let Some(prices_obj) = prices.as_object() {
+            for (outcome_name, price_value) in prices_obj {
+                if let Some(price_num) = price_value.as_f64() {
+                    price_entries.push(PriceEntry {
+                        outcome_name: outcome_name.clone(),
+                        price: price_num,
+                        volume: None,
+                        source_data: serde_json::Value::Null,
+                    });
+                }
+            }
+        }
+        
+        price_entries
+    }
+
+    // Get latest prices for all markets of an event
+    pub async fn get_latest_prices_for_event(&self, event_fingerprint: &str) -> anyhow::Result<Vec<EventPriceData>> {
+        let conn = self.pool.get().await?;
+        
+        let rows = conn.query(
+            r#"
+            SELECT 
+                ae.event_fingerprint,
+                ae.title,
+                ms.source,
+                ms.market_id,
+                ms.name,
+                ms.prices,
+                ms.outcomes,
+                ms.observed_at,
+                ms.traded_amount
+            FROM aggregated_events ae
+            JOIN market_sources ms ON ae.id = ms.aggregated_event_id
+            WHERE ae.event_fingerprint = $1
+            ORDER BY ms.observed_at DESC
+            "#,
+            &[&event_fingerprint]
+        ).await?;
+        
+        let mut event_prices = Vec::new();
+        for row in rows {
+            event_prices.push(EventPriceData {
+                event_fingerprint: row.get("event_fingerprint"),
+                event_title: row.get("title"),
+                source: row.get("source"),
+                market_id: row.get("market_id"),
+                market_name: row.get("name"),
+                prices: row.get("prices"),
+                outcomes: row.get("outcomes"),
+                observed_at: row.get("observed_at"),
+                traded_amount: row.get("traded_amount"),
+            });
+        }
+        
+        Ok(event_prices)
+    }
+
+    // Get price history for a specific market
+    pub async fn get_price_history_for_market(&self, market_source_id: Uuid, limit: Option<i64>) -> anyhow::Result<Vec<PriceHistoryEntry>> {
+        let conn = self.pool.get().await?;
+        
+        let limit_clause = if let Some(limit) = limit {
+            format!("LIMIT {}", limit)
+        } else {
+            String::new()
+        };
+        
+        let query = format!(
+            r#"
+            SELECT outcome_index, outcome_name, price, volume, timestamp, source_data
+            FROM price_history
+            WHERE market_source_id = $1
+            ORDER BY timestamp DESC
+            {}
+            "#,
+            limit_clause
+        );
+        
+        let rows = conn.query(&query, &[&market_source_id]).await?;
+        
+        let mut history = Vec::new();
+        for row in rows {
+            history.push(PriceHistoryEntry {
+                outcome_index: row.get("outcome_index"),
+                outcome_name: row.get("outcome_name"),
+                price: row.get("price"),
+                volume: row.get("volume"),
+                timestamp: row.get("timestamp"),
+                source_data: row.get("source_data"),
+            });
+        }
+        
+        Ok(history)
+    }
+}
+
+// Helper structs for price data
+#[derive(Debug, Clone)]
+struct PriceEntry {
+    outcome_name: String,
+    price: f64,
+    volume: Option<f64>,
+    source_data: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct EventPriceData {
+    pub event_fingerprint: String,
+    pub event_title: String,
+    pub source: String,
+    pub market_id: String,
+    pub market_name: Option<String>,
+    pub prices: Option<serde_json::Value>,
+    pub outcomes: Option<serde_json::Value>,
+    pub observed_at: String,
+    pub traded_amount: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PriceHistoryEntry {
+    pub outcome_index: i32,
+    pub outcome_name: String,
+    pub price: f64,
+    pub volume: Option<f64>,
+    pub timestamp: String,
+    pub source_data: serde_json::Value,
 }
 
 
