@@ -11,7 +11,8 @@ impl crate::sources::Source for ThalesSource {
 
     async fn run(&self, tx: tokio::sync::mpsc::Sender<MarketEvent>) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
-        let endpoint = "https://api.thalesmarket.io/thales/markets";
+        // Updated to use the correct Thales API endpoint
+        let endpoint = "https://api.thalesmarket.io/markets";
         loop {
             match client.get(endpoint).send().await {
                 Ok(resp) => {

@@ -23,6 +23,9 @@ impl crate::sources::Source for PolymarketSource {
                     Ok(resp) => {
                         if resp.status().is_success() {
                             if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                println!("🔍 POLYMARKET DATA RECEIVED:");
+                                println!("{:#}", json);
+                                
                                 let evt = MarketEvent::new(
                                     PlatformSource::Polymarket,
                                     MarketEventKind::MarketMetadata,
@@ -63,7 +66,8 @@ impl crate::sources::Source for PolymarketSource {
         });
 
         // WebSocket orderbook/trades subscription with reconnection
-        let url = url::Url::parse("wss://ws-subscriptions-clob.polymarket.com/ws/market")?;
+        // Note: This endpoint may need to be updated based on current Polymarket API
+        let url = url::Url::parse("wss://clob.polymarket.com/ws")?;
         let tx_ws = tx.clone();
         
         tokio::spawn(async move {
