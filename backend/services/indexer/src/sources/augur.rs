@@ -20,6 +20,9 @@ impl crate::sources::Source for AugurSource {
             match client.post(endpoint).json(&query).send().await {
                 Ok(resp) => {
                     if let Ok(json) = resp.json::<serde_json::Value>().await {
+                        println!("🔍 AUGUR DATA RECEIVED:");
+                        println!("{:#}", json);
+                        
                         let evt = MarketEvent::new(
                             PlatformSource::Augur,
                             MarketEventKind::MarketMetadata,

@@ -11,6 +11,7 @@ impl crate::sources::Source for OmenSource {
 
     async fn run(&self, tx: tokio::sync::mpsc::Sender<MarketEvent>) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
+        // Using the correct Omen subgraph endpoint
         let endpoint = "https://api.thegraph.com/subgraphs/name/gnosis/omen";
         let query = serde_json::json!({
             "query": "{ markets { id question outcomes status liquidity oracle { outcome } } }"
