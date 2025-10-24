@@ -39,7 +39,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Database connected successfully");
     
     // Create router
-    let app = create_router(db, &config);
+    let app = create_router(db.clone(), &config);
+    
+    // Start background cleanup task
+    let db_cleanup = db.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(24 * 60 * 60)); // Run daily
+        loop {
+            interval.tick().await;
+            match db_cleanup.cleanup_old_idempotency_keys(7).await {
+                Ok(deleted_count) => {
+                    tracing::info!("Cleaned up {} old idempotency keys", deleted_count);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to cleanup idempotency keys: {}", e);
+                }
+            }
+        }
+    });
     
     // Start server
     let addr = config.server_addr();

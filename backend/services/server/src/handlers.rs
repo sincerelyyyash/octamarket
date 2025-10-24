@@ -22,10 +22,52 @@ fn idempotency_key_from(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+
 // ---------- Health Check
 
-pub async fn health() -> impl IntoResponse {
-    Json(serde_json::json!({ "status": "ok" }))
+pub async fn health(State(db): State<Database>) -> impl IntoResponse {
+    // Check database connectivity
+    let db_healthy = match db.pool().acquire().await {
+        Ok(_) => true,
+        Err(_) => false,
+    };
+    
+    let status = if db_healthy { "healthy" } else { "unhealthy" };
+    
+    Json(serde_json::json!({
+        "status": status,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "database": if db_healthy { "connected" } else { "disconnected" }
+    }))
+}
+
+pub async fn metrics(State(db): State<Database>) -> impl IntoResponse {
+    // Get basic metrics from the database
+    let mut metrics = serde_json::json!({
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "database": "connected"
+    });
+    
+    // Try to get some basic counts using the pool directly
+    // Get user count
+    if let Ok(user_count) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
+        .fetch_one(db.pool()).await {
+        metrics["users"] = serde_json::json!(user_count);
+    }
+    
+    // Get active follows count
+    if let Ok(follows_count) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM follows WHERE status = 'active'")
+        .fetch_one(db.pool()).await {
+        metrics["active_follows"] = serde_json::json!(follows_count);
+    }
+    
+    // Get pending jobs count
+    if let Ok(jobs_count) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM replication_jobs WHERE status = 'pending'")
+        .fetch_one(db.pool()).await {
+        metrics["pending_jobs"] = serde_json::json!(jobs_count);
+    }
+    
+    Json(metrics)
 }
 
 // ---------- Auth Handlers
@@ -203,7 +245,7 @@ pub async fn post_close_all(
     auth: AuthUser,
     Path(follow_id): Path<String>,
     State(db): State<Database>,
-    Json(_body): Json<CloseAllReq>,
+    Json(body): Json<CloseAllReq>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Verify ownership
     let follow = db.get_follow(&follow_id).await?;
@@ -211,8 +253,57 @@ pub async fn post_close_all(
         return Err(ApiError::Forbidden);
     }
     
-    // MVP: pretend we enqueued close jobs
-    Ok(Json(serde_json::json!({ "accepted": true })))
+    // Get all positions for this follow
+    let positions = db.get_user_positions_for_follow(&auth.user_id, &follow_id).await?;
+    let positions_count = positions.len();
+    
+    if positions.is_empty() {
+        return Ok(Json(serde_json::json!({ 
+            "accepted": true, 
+            "message": "No positions to close",
+            "jobs_created": 0 
+        })));
+    }
+    
+    let mut jobs_created = 0;
+    let mut errors = Vec::new();
+    
+    // Create close jobs for each position
+    for position in positions {
+        match db.create_close_job(
+            &auth.user_id,
+            &follow_id,
+            &position.market_source_id,
+            &position.side,
+            position.size_usdc,
+            &body.mode,
+            body.slippage_bps,
+        ).await {
+            Ok(_job_id) => {
+                jobs_created += 1;
+            }
+            Err(e) => {
+                errors.push(format!("Failed to create close job for position {}: {}", position.market_source_id, e));
+            }
+        }
+    }
+    
+    let response = if errors.is_empty() {
+        serde_json::json!({
+            "accepted": true,
+            "jobs_created": jobs_created,
+            "positions_found": positions_count
+        })
+    } else {
+        serde_json::json!({
+            "accepted": true,
+            "jobs_created": jobs_created,
+            "positions_found": positions_count,
+            "errors": errors
+        })
+    };
+    
+    Ok(Json(response))
 }
 
 // ---------- Trade Event Handlers
@@ -222,13 +313,14 @@ pub async fn post_leader_trade(
     State(db): State<Database>,
     Json(evt): Json<LeaderTradeEvent>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // Validate event
-    if evt.notional_usdc <= 0.0 {
-        return Err(ApiError::Validation("notionalUsdc must be positive".to_string()));
+    // Validate event using the new validation method
+    if let Err(validation_error) = evt.validate() {
+        return Err(ApiError::Validation(validation_error));
     }
     
-    if !matches!(evt.side.as_str(), "buy" | "sell") {
-        return Err(ApiError::Validation("side must be 'buy' or 'sell'".to_string()));
+    // Validate market source exists
+    if !db.validate_market_source_exists(&evt.market_source_id).await? {
+        return Err(ApiError::Validation(format!("Market source {} does not exist", evt.market_source_id)));
     }
     
     // Check idempotency
@@ -238,34 +330,8 @@ pub async fn post_leader_trade(
         return Err(ApiError::Conflict);
     }
     
-    // Get active followers
-    let follows = db.get_active_follows_for_leader(&evt.leader_id).await?;
-    
-    let mut count = 0;
-    
-    for follow in follows {
-        let cap_total = follow.base_allocation_usdc * follow.max_utilization_pct;
-        let remaining = (cap_total - follow.utilized_usdc).max(0.0);
-        let cap_trade = follow.base_allocation_usdc * follow.max_per_trade_pct;
-        let size = remaining.min(cap_trade);
-        
-        if size > 0.0 {
-            let job = ReplicationJob {
-                job_id: format!("job_{}", Uuid::new_v4().simple()),
-                follow_id: follow.follow_id,
-                user_id: follow.user_id,
-                leader_id: evt.leader_id.clone(),
-                venue: evt.venue.clone(),
-                market_id: evt.market_id.clone(),
-                side: evt.side.clone(),
-                size_usdc: size,
-                slippage_bps: follow.slippage_bps,
-            };
-            
-            db.create_replication_job(&job).await?;
-            count += 1;
-        }
-    }
+    // Process leader trade with proper transaction handling
+    let count = db.process_leader_trade(&evt).await?;
     
     Ok(Json(serde_json::json!({
         "accepted": true,
@@ -298,7 +364,7 @@ pub async fn post_job_complete(
     db.create_order(
         &job.user_id,
         &job.leader_id,
-        &job.market_id,
+        &job.market_source_id,
         &job.side,
         job.size_usdc,
         &done.status,
@@ -312,7 +378,7 @@ pub async fn post_job_complete(
         let price = done.avg_price.unwrap_or(0.0);
         
         // Get existing position if any
-        if let Some(pos) = db.get_position(&job.user_id, &job.market_id, &job.side).await? {
+        if let Some(pos) = db.get_position(&job.user_id, &job.market_source_id, &job.side).await? {
             // Dollar-cost average
             let new_notional = pos.size_usdc + filled;
             let avg = if new_notional > 0.0 {
@@ -321,10 +387,10 @@ pub async fn post_job_complete(
                 pos.avg_price
             };
             
-            db.upsert_position(&job.user_id, &job.market_id, &job.side, new_notional, avg).await?;
+            db.upsert_position(&job.user_id, &job.market_source_id, &job.side, new_notional, avg).await?;
         } else {
             // New position
-            db.upsert_position(&job.user_id, &job.market_id, &job.side, filled, price).await?;
+            db.upsert_position(&job.user_id, &job.market_source_id, &job.side, filled, price).await?;
         }
     }
     
@@ -349,4 +415,85 @@ pub async fn get_orders(
     let user_id = &auth.user_id;
     let orders = db.get_user_orders(user_id).await?;
     Ok(Json(orders))
+}
+
+// ---------- Market Data Handlers
+
+pub async fn get_events(
+    State(db): State<Database>,
+    Query(query): Query<EventsQuery>,
+) -> Result<Json<Vec<AggregatedEvent>>, ApiError> {
+    let events = db.get_events(&query).await?;
+    Ok(Json(events))
+}
+
+pub async fn get_event(
+    Path(event_fingerprint): Path<String>,
+    State(db): State<Database>,
+) -> Result<Json<AggregatedEvent>, ApiError> {
+    let event = db.get_event(&event_fingerprint).await?;
+    Ok(Json(event))
+}
+
+pub async fn get_markets(
+    State(db): State<Database>,
+    Query(query): Query<MarketsQuery>,
+) -> Result<Json<Vec<MarketData>>, ApiError> {
+    let markets = db.get_markets(&query).await?;
+    Ok(Json(markets))
+}
+
+pub async fn get_market_source(
+    Path(market_source_id): Path<Uuid>,
+    State(db): State<Database>,
+) -> Result<Json<MarketSource>, ApiError> {
+    // Validate market source exists first
+    if !db.validate_market_source_exists(&market_source_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    
+    let market = db.get_market_source(&market_source_id).await?;
+    Ok(Json(market))
+}
+
+pub async fn get_price_history(
+    Path(market_source_id): Path<Uuid>,
+    State(db): State<Database>,
+    Query(query): Query<PriceHistoryQuery>,
+) -> Result<Json<Vec<PriceHistoryEntry>>, ApiError> {
+    // Validate market source exists first
+    if !db.validate_market_source_exists(&market_source_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    
+    let mut price_query = query;
+    price_query.market_source_id = market_source_id;
+    let history = db.get_price_history(&price_query).await?;
+    Ok(Json(history))
+}
+
+pub async fn get_price_trends(
+    Path(market_source_id): Path<Uuid>,
+    State(db): State<Database>,
+) -> Result<Json<Vec<PriceTrend>>, ApiError> {
+    // Validate market source exists first
+    if !db.validate_market_source_exists(&market_source_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    
+    let trends = db.get_price_trends(&market_source_id).await?;
+    Ok(Json(trends))
+}
+
+// ---------- Maintenance Handlers
+
+pub async fn cleanup_idempotency_keys(
+    State(db): State<Database>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let deleted_count = db.cleanup_old_idempotency_keys(7).await?; // Clean up keys older than 7 days
+    
+    Ok(Json(serde_json::json!({
+        "deleted_keys": deleted_count,
+        "message": "Idempotency keys cleanup completed"
+    })))
 }

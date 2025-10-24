@@ -18,15 +18,24 @@ pub fn create_router(db: Database, config: &Config) -> Router {
             .allow_headers(Any);
         
         for origin in &config.allowed_origins {
-            cors = cors.allow_origin(origin.parse::<http::HeaderValue>().unwrap());
+            match origin.parse::<http::HeaderValue>() {
+                Ok(header_value) => {
+                    cors = cors.allow_origin(header_value);
+                }
+                Err(e) => {
+                    tracing::warn!("Invalid CORS origin '{}': {}", origin, e);
+                    // Skip invalid origins instead of panicking
+                }
+            }
         }
         
         cors
     };
 
     Router::new()
-        // Health check
+        // Health check and metrics
         .route("/health", get(health))
+        .route("/metrics", get(metrics))
         
         // Auth routes (public)
         .route("/auth/register", post(register))
@@ -55,6 +64,17 @@ pub fn create_router(db: Database, config: &Config) -> Router {
         // Portfolio routes (protected)
         .route("/positions", get(get_positions))
         .route("/orders", get(get_orders))
+        
+        // Market data routes (public)
+        .route("/events", get(get_events))
+        .route("/events/{event_fingerprint}", get(get_event))
+        .route("/markets", get(get_markets))
+        .route("/markets/{market_source_id}", get(get_market_source))
+        .route("/markets/{market_source_id}/price-history", get(get_price_history))
+        .route("/markets/{market_source_id}/price-trends", get(get_price_trends))
+        
+        // Maintenance routes (protected)
+        .route("/admin/cleanup/idempotency", post(cleanup_idempotency_keys))
         
         // Add state and middleware
         .with_state(db)
