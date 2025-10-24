@@ -1,11 +1,9 @@
-version: '3.8'
-
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     container_name: opinion-markets-db
     environment:
-      POSTGRES_DB: indexer
+      POSTGRES_DB: opinion_markets
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_HOST_AUTH_METHOD: trust
@@ -13,13 +11,61 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./services/indexer/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d indexer"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d opinion_markets"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - opinion-markets-network
+
+  indexer:
+    build:
+      context: ./services/indexer
+      dockerfile: Dockerfile
+    container_name: opinion-markets-indexer
+    environment:
+      - POSTGRES_URL=postgres://postgres:postgres@postgres:5432/opinion_markets
+      - RUST_LOG=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - opinion-markets-network
+    volumes:
+      - ./services/indexer:/app
+    working_dir: /app
+
+  server:
+    build:
+      context: ./services/server
+      dockerfile: Dockerfile
+    container_name: opinion-markets-server
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/opinion_markets
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=3000
+      - JWT_SECRET=your-super-secret-jwt-key-change-in-production
+      - ALLOWED_ORIGINS=*
+      - RUST_LOG=info
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - opinion-markets-network
+    volumes:
+      - ./services/server:/app
+    working_dir: /app
 
 volumes:
   postgres_data:
+
+networks:
+  opinion-markets-network:
+    driver: bridge
