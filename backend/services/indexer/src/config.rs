@@ -26,7 +26,7 @@ impl AppConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let cfg = config::Config::builder()
             .add_source(config::Environment::default().separator("__"))
-            .set_default("postgres_url", "postgres://postgres:postgres@localhost:5432/indexer")?
+            .set_default("postgres_url", "postgres://postgres:postgres@localhost:5432/opinion_markets")?
             .set_default("price_fetch_interval_seconds", 60)?
             .set_default("max_requests_per_minute", 100)?
             .set_default("request_timeout_seconds", 30)?
