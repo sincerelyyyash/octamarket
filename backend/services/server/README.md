@@ -1,6 +1,6 @@
-# Copy Trading Server
+# Opinion Markets Server
 
-A Rust-based API server for copy trading on prediction markets.
+A Rust-based API server for copy trading on prediction markets with integrated market data indexing.
 
 ## Prerequisites
 
@@ -13,8 +13,8 @@ A Rust-based API server for copy trading on prediction markets.
 ### 1. Start Database
 
 ```bash
-cd backend/services/server
-docker-compose up -d
+cd backend
+docker-compose up -d postgres
 ```
 
 ### 2. Configure Environment
@@ -25,7 +25,7 @@ cp env.example .env
 
 Default configuration:
 ```env
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/copytrading
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/opinion_markets
 SERVER_HOST=0.0.0.0
 SERVER_PORT=8080
 RUST_LOG=server=debug,tower_http=debug
@@ -51,7 +51,28 @@ GET /health
 
 **Response:**
 ```json
-{"status": "ok"}
+{
+  "status": "healthy",
+  "timestamp": "2024-01-01T12:00:00Z",
+  "database": "connected"
+}
+```
+
+### Metrics
+
+```
+GET /metrics
+```
+
+**Response:**
+```json
+{
+  "timestamp": "2024-01-01T12:00:00Z",
+  "database": "connected",
+  "users": 150,
+  "active_follows": 42,
+  "pending_jobs": 3
+}
 ```
 
 ---
@@ -247,6 +268,17 @@ Content-Type: application/json
 }
 ```
 
+**Response:**
+```json
+{
+  "accepted": true,
+  "jobs_created": 3,
+  "positions_found": 3
+}
+```
+
+Creates close jobs for all positions associated with the follow. Each position gets a separate close job that will be processed by the worker service.
+
 ---
 
 ### Trade Events (System)
@@ -262,7 +294,7 @@ Idempotency-Key: <unique-key>
   "idempotency_key": "trade_unique_123",
   "leader_id": "leader_1",
   "venue": "polymarket",
-  "market_id": "TRUMP-NO-2024",
+  "market_source_id": "550e8400-e29b-41d4-a716-446655440000",
   "side": "buy",
   "price": 0.55,
   "notional_usdc": 500.0,
@@ -297,7 +329,7 @@ GET /jobs/replications
     "user_id": "usr_123",
     "leader_id": "leader_1",
     "venue": "polymarket",
-    "market_id": "TRUMP-NO-2024",
+    "market_source_id": "550e8400-e29b-41d4-a716-446655440000",
     "side": "buy",
     "size_usdc": 200.0,
     "slippage_bps": 50
@@ -325,6 +357,100 @@ Status values: `"filled"`, `"partial"`, `"skipped"`, `"failed"`
 
 ---
 
+### Market Data (Public)
+
+#### Get All Events
+
+```
+GET /events?limit=10&status=active&source=polymarket
+```
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "event_fingerprint": "event_123",
+    "title": "Will Bitcoin reach $100,000 by end of 2024?",
+    "description": "Prediction market for Bitcoin price",
+    "end_time": "2024-12-31T23:59:59Z",
+    "status": "active",
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  }
+]
+```
+
+#### Get Event Details
+
+```
+GET /events/{event_fingerprint}
+```
+
+#### Get Markets
+
+```
+GET /markets?event_fingerprint=event_123&source=polymarket&limit=10
+```
+
+**Response:**
+```json
+[
+  {
+    "event_fingerprint": "event_123",
+    "event_title": "Will Bitcoin reach $100,000 by end of 2024?",
+    "source": "polymarket",
+    "market_id": "market_456",
+    "market_name": "Bitcoin $100K Market",
+    "outcomes": ["Yes", "No"],
+    "prices": [0.65, 0.35],
+    "traded_amount": 10000.0,
+    "observed_at": "2024-01-01T12:00:00Z"
+  }
+]
+```
+
+#### Get Market Source Details
+
+```
+GET /markets/{market_source_id}
+```
+
+#### Get Price History
+
+```
+GET /markets/{market_source_id}/price-history?limit=100&hours_back=24
+```
+
+#### Get Price Trends
+
+```
+GET /markets/{market_source_id}/price-trends
+```
+
+---
+
+### Maintenance (Protected)
+
+#### Cleanup Idempotency Keys
+
+```
+POST /admin/cleanup/idempotency
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "deleted_keys": 150,
+  "message": "Idempotency keys cleanup completed"
+}
+```
+
+Removes idempotency keys older than 7 days. This endpoint is also called automatically by a background task that runs daily.
+
+---
+
 ### Portfolio (Protected)
 
 #### Get Positions
@@ -338,7 +464,7 @@ Authorization: Bearer <token>
 ```json
 [
   {
-    "market_id": "TRUMP-NO-2024",
+    "market_source_id": "550e8400-e29b-41d4-a716-446655440000",
     "side": "buy",
     "size_usdc": 400.0,
     "avg_price": 0.54,
@@ -361,7 +487,7 @@ Authorization: Bearer <token>
     "id": "order_123",
     "user_id": "usr_123",
     "leader_id": "leader_1",
-    "market_id": "TRUMP-NO-2024",
+    "market_source_id": "550e8400-e29b-41d4-a716-446655440000",
     "side": "buy",
     "size_usdc": 200.0,
     "status": "filled",
@@ -398,7 +524,7 @@ Invoke-WebRequest http://localhost:8080/follows/me `
 # Report Leader Trade
 Invoke-WebRequest -Uri http://localhost:8080/events/leader-trade -Method POST `
   -Headers @{"Content-Type"="application/json"; "Idempotency-Key"="trade_123"} `
-  -Body '{"idempotency_key":"trade_123","leader_id":"leader_1","venue":"polymarket","market_id":"TRUMP-NO-2024","side":"buy","price":0.55,"notional_usdc":500,"ts":"2025-10-23T12:00:00Z"}'
+  -Body '{"idempotency_key":"trade_123","leader_id":"leader_1","venue":"polymarket","market_source_id":"550e8400-e29b-41d4-a716-446655440000","side":"buy","price":0.55,"notional_usdc":500,"ts":"2025-10-23T12:00:00Z"}'
 
 # Get Pending Jobs
 Invoke-WebRequest http://localhost:8080/jobs/replications | ConvertFrom-Json
@@ -436,10 +562,10 @@ curl http://localhost:8080/positions \
 
 ## Database Schema
 
-The database is automatically initialized with the schema from `schema.sql`:
+The database is automatically initialized with the schema from `backend/database/init.sql`:
 
 - `users` - User accounts
-- `leaders` - Trading leaders
+- `leaders` - Trading leaders  
 - `leader_stats` - Leader statistics
 - `leader_markets` - Markets traded by leaders
 - `follows` - User follow relationships
@@ -447,6 +573,9 @@ The database is automatically initialized with the schema from `schema.sql`:
 - `replication_jobs` - Trade replication queue
 - `orders` - Order history
 - `positions` - User positions
+- `aggregated_events` - Market events (from indexer)
+- `market_sources` - Market data sources (from indexer)
+- `price_history` - Historical price data (from indexer)
 
 ## Architecture
 
@@ -478,15 +607,17 @@ The system respects user-defined limits:
 ### Stop Database
 
 ```bash
+cd backend
 docker-compose down
 ```
 
 ### Reset Database
 
 ```bash
+cd backend
 docker-compose down
-docker volume rm server_postgres_data
-docker-compose up -d
+docker volume rm backend_postgres_data
+docker-compose up -d postgres
 ```
 
 ### View Logs
@@ -496,6 +627,7 @@ docker-compose up -d
 RUST_LOG=debug cargo run
 
 # Database logs
+cd backend
 docker-compose logs -f postgres
 ```
 
