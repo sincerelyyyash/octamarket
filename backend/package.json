@@ -26,7 +26,9 @@
   },
   "name": "with-prisma",
   "dependencies": {
-    "@prisma/client": "latest"
+    "@prisma/client": "latest",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0"
   },
   "packageManager": "bun@1.2.22",
   "workspaces": [
