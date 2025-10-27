@@ -2,7 +2,7 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -11,9 +11,358 @@ generator client {
   output = "../generated/client"
 }
 
+// Enum definitions
+enum MarketSource {
+  POLYMARKET
+  KALSHI
+  AUGUR
+  THALES
+  OMEN
+}
+
+enum MarketStatus {
+  ACTIVE
+  RESOLVED
+  CANCELLED
+  PAUSED
+}
+
+enum EventType {
+  MARKET_CREATED
+  MARKET_UPDATED
+  MARKET_RESOLVED
+  PRICE_UPDATE
+  VOLUME_UPDATE
+  LIQUIDITY_UPDATE
+  TRADE_EXECUTED
+  TRADER_UPDATED
+}
+
+enum TradeSide {
+  BUY
+  SELL
+}
+
+enum TradeStatus {
+  PENDING
+  EXECUTED
+  CANCELLED
+  FAILED
+}
+
+// Core models
 model User {
   id            String    @id @default(cuid())
   name          String?
   email         String?   @unique
   emailVerified DateTime?
+}
+
+// Canonical market representation
+model Market {
+  id                String           @id @default(cuid())
+  title             String
+  description       String?          @db.Text
+  category          String?
+  tags              Json?            // Array of tags
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  endDate           DateTime?
+  resolutionDate    DateTime?
+  status            MarketStatus     @default(ACTIVE)
+  
+  // Market metadata
+  totalVolume       Decimal?         @db.Decimal(20, 8)
+  totalLiquidity    Decimal?         @db.Decimal(20, 8)
+  participantCount  Int?             @default(0)
+  
+  // Resolution data
+  resolvedOutcome   String?
+  resolutionSource  String?
+  
+  // Relations
+  sourceMarkets     SourceMarket[]
+  outcomes          MarketOutcome[]
+  events            MarketEvent[]
+  priceHistory      PriceHistory[]
+  trades            Trade[]
+  
+  @@index([status])
+  @@index([endDate])
+  @@index([category])
+}
+
+// Source-specific market data
+model SourceMarket {
+  id              String        @id @default(cuid())
+  marketId        String
+  source          MarketSource
+  sourceMarketId  String        // ID from the source platform
+  sourceData      Json          // Raw data from source
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  // Relations
+  market          Market        @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  
+  @@unique([source, sourceMarketId])
+  @@index([marketId])
+  @@index([source])
+}
+
+// Market outcomes/options
+model MarketOutcome {
+  id          String         @id @default(cuid())
+  marketId    String
+  title       String
+  description String?
+  index       Int            // Position in the outcome list
+  
+  // Current state
+  currentPrice     Decimal?   @db.Decimal(10, 8)
+  currentVolume    Decimal?   @db.Decimal(20, 8)
+  currentLiquidity Decimal?   @db.Decimal(20, 8)
+  
+  // Resolution
+  isWinning   Boolean?       // Set when market resolves
+  
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  
+  // Relations
+  market      Market         @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  priceHistory PriceHistory[]
+  
+  @@unique([marketId, index])
+  @@index([marketId])
+}
+
+// Event log for all market activities
+model MarketEvent {
+  id          String      @id @default(cuid())
+  marketId    String
+  source      MarketSource
+  eventType   EventType
+  timestamp   DateTime    @default(now())
+  
+  // Event data
+  data        Json        // Structured event data
+  rawPayload  Json        // Original payload from source
+  
+  // Processing metadata
+  processedAt DateTime    @default(now())
+  
+  // Relations
+  market      Market      @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  
+  @@index([marketId])
+  @@index([source])
+  @@index([eventType])
+  @@index([timestamp])
+}
+
+// Price history tracking
+model PriceHistory {
+  id          String        @id @default(cuid())
+  marketId    String
+  outcomeId   String?       // Null for binary markets
+  source      MarketSource
+  
+  // Price data
+  price       Decimal       @db.Decimal(10, 8)
+  volume      Decimal?      @db.Decimal(20, 8)
+  liquidity   Decimal?      @db.Decimal(20, 8)
+  
+  timestamp   DateTime      @default(now())
+  
+  // Relations
+  market      Market        @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  outcome     MarketOutcome? @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
+  
+  @@index([marketId, timestamp])
+  @@index([source, timestamp])
+  @@index([outcomeId, timestamp])
+}
+
+// Market deduplication and mapping
+model MarketMapping {
+  id                String   @id @default(cuid())
+  canonicalMarketId String   // The main market ID
+  duplicateMarketId String   // The duplicate market ID
+  confidence        Decimal  @db.Decimal(3, 2) // 0.00 to 1.00
+  createdAt         DateTime @default(now())
+  
+  @@unique([canonicalMarketId, duplicateMarketId])
+  @@index([canonicalMarketId])
+}
+
+// Trader profiles from different sources
+model Trader {
+  id                String        @id @default(cuid())
+  source            MarketSource
+  sourceTraderId    String        // ID from the source platform
+  username          String?
+  displayName       String?
+  profileImageUrl   String?
+  
+  // Performance metrics
+  totalTrades       Int           @default(0)
+  totalVolume       Decimal       @default(0) @db.Decimal(20, 8)
+  totalPnl          Decimal       @default(0) @db.Decimal(20, 8)
+  winRate           Decimal?      @db.Decimal(5, 4) // 0.0000 to 1.0000
+  avgReturn         Decimal?      @db.Decimal(10, 8)
+  
+  // Rankings
+  currentRank       Int?
+  bestRank          Int?
+  rankChange        Int?          @default(0)
+  
+  // Activity tracking
+  lastActiveAt      DateTime?
+  firstTradeAt      DateTime?
+  lastTradeAt       DateTime?
+  
+  // Copy trading settings
+  isPublic          Boolean       @default(true)
+  allowCopyTrading  Boolean       @default(false)
+  maxFollowers      Int?          // Limit on followers
+  
+  // Metadata
+  sourceData        Json?         // Raw data from source
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  
+  // Relations
+  trades            Trade[]
+  followers         TraderFollow[] @relation("TraderFollowers")
+  following         TraderFollow[] @relation("TraderFollowing")
+  leaderboardSnapshots LeaderboardSnapshot[]
+  
+  @@unique([source, sourceTraderId])
+  @@index([source])
+  @@index([currentRank])
+  @@index([totalPnl])
+  @@index([winRate])
+}
+
+// Individual trades from traders
+model Trade {
+  id                String        @id @default(cuid())
+  traderId          String
+  source            MarketSource
+  sourceTradeId     String        // ID from the source platform
+  
+  // Market information
+  marketId          String?       // Reference to our canonical market
+  sourceMarketId    String        // Market ID from source platform
+  
+  // Trade details
+  side              TradeSide
+  outcomeIndex      Int?          // For multi-outcome markets
+  quantity          Decimal       @db.Decimal(20, 8)
+  price             Decimal       @db.Decimal(10, 8)
+  totalValue        Decimal       @db.Decimal(20, 8)
+  
+  // Trade status
+  status            TradeStatus   @default(EXECUTED)
+  executedAt        DateTime
+  
+  // PnL tracking (calculated after market resolution)
+  realizedPnl       Decimal?      @db.Decimal(20, 8)
+  unrealizedPnl      Decimal?      @db.Decimal(20, 8)
+  
+  // Copy trading metadata
+  isCopyTrade       Boolean       @default(false)
+  originalTradeId   String?       // Reference to original trade if this is a copy
+  copiedByTraderId  String?       // Trader who copied this trade
+  
+  // Metadata
+  sourceData        Json?         // Raw data from source
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  
+  // Relations
+  trader            Trader        @relation(fields: [traderId], references: [id], onDelete: Cascade)
+  market            Market?       @relation(fields: [marketId], references: [id])
+  originalTrade     Trade?        @relation("TradeCopies", fields: [originalTradeId], references: [id])
+  copiedTrades      Trade[]       @relation("TradeCopies")
+  
+  @@unique([source, sourceTradeId])
+  @@index([traderId])
+  @@index([marketId])
+  @@index([executedAt])
+  @@index([source])
+  @@index([isCopyTrade])
+}
+
+// Trader following relationships
+model TraderFollow {
+  id                String        @id @default(cuid())
+  followerId        String        // Trader who is following
+  followingId       String        // Trader being followed
+  
+  // Copy trading settings
+  autoCopyTrades    Boolean       @default(false)
+  maxCopyAmount     Decimal?      @db.Decimal(20, 8) // Max amount per copied trade
+  copyPercentage    Decimal?      @db.Decimal(5, 4) // Percentage of original trade to copy
+  
+  // Activity tracking
+  totalCopiedTrades Int           @default(0)
+  totalCopiedValue  Decimal       @default(0) @db.Decimal(20, 8)
+  totalCopiedPnl    Decimal       @default(0) @db.Decimal(20, 8)
+  
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  
+  // Relations
+  follower          Trader        @relation("TraderFollowers", fields: [followerId], references: [id], onDelete: Cascade)
+  following         Trader        @relation("TraderFollowing", fields: [followingId], references: [id], onDelete: Cascade)
+  
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+}
+
+// Leaderboard snapshots for historical tracking
+model LeaderboardSnapshot {
+  id                String        @id @default(cuid())
+  source            MarketSource
+  snapshotDate      DateTime      @default(now())
+  
+  // Top performers
+  topTraderId       String
+  topTraderPnl      Decimal       @db.Decimal(20, 8)
+  topTraderVolume   Decimal       @db.Decimal(20, 8)
+  
+  // Overall stats
+  totalTraders      Int
+  totalVolume       Decimal       @db.Decimal(20, 8)
+  totalTrades       Int
+  avgPnl            Decimal       @db.Decimal(20, 8)
+  
+  // Metadata
+  createdAt         DateTime      @default(now())
+  
+  // Relations
+  topTrader         Trader        @relation(fields: [topTraderId], references: [id])
+  
+  @@index([source, snapshotDate])
+  @@index([snapshotDate])
+}
+
+// Indexer state and metadata
+model IndexerState {
+  id            String   @id @default(cuid())
+  source        MarketSource @unique
+  lastSyncAt    DateTime?
+  lastBlockNumber BigInt? // For blockchain sources
+  lastEventId   String?  // For event-based sources
+  lastTradeSyncAt DateTime? // For leaderboard sync
+  isActive      Boolean  @default(true)
+  errorCount    Int      @default(0)
+  lastError     String?
+  updatedAt     DateTime @updatedAt
+  
+  @@index([source])
 }
