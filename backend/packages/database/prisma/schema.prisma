@@ -55,7 +55,11 @@ model User {
   id            String    @id @default(cuid())
   name          String?
   email         String?   @unique
+  password      String?   // Hashed password for email/password auth
   emailVerified DateTime?
+  walletAddress String?   @unique // Web3 wallet address
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 }
 
 // Canonical market representation
