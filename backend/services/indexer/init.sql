@@ -185,6 +185,85 @@ JOIN market_sources ms ON ph.market_source_id = ms.id
 JOIN aggregated_events ae ON ms.aggregated_event_id = ae.id
 ORDER BY ph.timestamp DESC;
 
+-- Tracked wallets table for monitoring trader addresses
+CREATE TABLE IF NOT EXISTS tracked_wallets (
+    id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    wallet_address text NOT NULL UNIQUE,
+    platform text NOT NULL,
+    nickname text,
+    is_active boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT NOW(),
+    updated_at timestamptz NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracked_wallets_platform ON tracked_wallets(platform);
+CREATE INDEX IF NOT EXISTS idx_tracked_wallets_is_active ON tracked_wallets(is_active);
+
+-- Wallet trades table for storing individual trades from tracked wallets
+CREATE TABLE IF NOT EXISTS wallet_trades (
+    id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+    wallet_id uuid NOT NULL REFERENCES tracked_wallets(id) ON DELETE CASCADE,
+    platform text NOT NULL,
+    market_id text NOT NULL,
+    side text NOT NULL,
+    outcome_index integer,
+    outcome_name text,
+    price numeric NOT NULL,
+    amount numeric NOT NULL,
+    tx_hash text,
+    timestamp timestamptz NOT NULL,
+    raw_data jsonb,
+    created_at timestamptz NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_wallet_trades_wallet_id ON wallet_trades(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_trades_platform ON wallet_trades(platform);
+CREATE INDEX IF NOT EXISTS idx_wallet_trades_market_id ON wallet_trades(market_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_trades_timestamp ON wallet_trades(timestamp);
+CREATE INDEX IF NOT EXISTS idx_wallet_trades_tx_hash ON wallet_trades(tx_hash);
+
+-- Wallet performance stats table
+CREATE TABLE IF NOT EXISTS wallet_stats (
+    wallet_id uuid PRIMARY KEY REFERENCES tracked_wallets(id) ON DELETE CASCADE,
+    total_trades integer NOT NULL DEFAULT 0,
+    win_count integer NOT NULL DEFAULT 0,
+    loss_count integer NOT NULL DEFAULT 0,
+    total_volume numeric NOT NULL DEFAULT 0,
+    pnl_7d numeric NOT NULL DEFAULT 0,
+    pnl_30d numeric NOT NULL DEFAULT 0,
+    pnl_all_time numeric NOT NULL DEFAULT 0,
+    win_rate numeric NOT NULL DEFAULT 0,
+    avg_position_size numeric NOT NULL DEFAULT 0,
+    largest_win numeric NOT NULL DEFAULT 0,
+    largest_loss numeric NOT NULL DEFAULT 0,
+    sharpe_ratio numeric,
+    last_trade_at timestamptz,
+    last_updated timestamptz NOT NULL DEFAULT NOW()
+);
+
+-- View for easy querying of wallet performance
+CREATE OR REPLACE VIEW wallet_leaderboard AS
+SELECT 
+    tw.id as wallet_id,
+    tw.wallet_address,
+    tw.platform,
+    tw.nickname,
+    ws.total_trades,
+    ws.win_count,
+    ws.loss_count,
+    ws.total_volume,
+    ws.pnl_7d,
+    ws.pnl_30d,
+    ws.pnl_all_time,
+    ws.win_rate,
+    ws.avg_position_size,
+    ws.last_trade_at,
+    ws.last_updated
+FROM tracked_wallets tw
+JOIN wallet_stats ws ON tw.id = ws.wallet_id
+WHERE tw.is_active = true
+ORDER BY ws.pnl_30d DESC;
+
 -- Grant permissions
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO postgres;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO postgres;

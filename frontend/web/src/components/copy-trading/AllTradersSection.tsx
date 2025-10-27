@@ -3,41 +3,25 @@
 import React, { useState } from 'react';
 import TraderCard from './TraderCard';
 import Image from 'next/image';
+import { useWalletLeaderboard } from '@/lib/api';
 
 export default function AllTradersSection() {
   const [activeTab, setActiveTab] = useState('all');
+  const { data: leaderboard, isLoading, error } = useWalletLeaderboard({ limit: 50 });
 
   const handleTabClick = (tab: string) => {
     setActiveTab(tab);
-    console.log(activeTab);
   };
 
-  const traders = [
-    {
-      name: 'Harkirat Singh',
-      username: '100xSchool',
-      roi: '+20.95%',
-      cumulativePnL: '+52,944.59',
-      copiers: '317',
-      winRatio: '76.00%',
-    },
-    {
-      name: 'Alex Chen',
-      username: 'CryptoTrader',
-      roi: '+15.32%',
-      cumulativePnL: '+28,156.23',
-      copiers: '189',
-      winRatio: '68.50%',
-    },
-    {
-      name: 'Sarah Johnson',
-      username: 'DeFiQueen',
-      roi: '-8.45%',
-      cumulativePnL: '-12,345.67',
-      copiers: '95',
-      winRatio: '42.30%',
-    },
-  ];
+  // Transform API data to TraderCard format
+  const traders = leaderboard?.map((wallet: any) => ({
+    name: wallet.nickname || wallet.wallet_address.substring(0, 10) + '...',
+    username: wallet.wallet_address.substring(0, 8),
+    roi: `${wallet.pnl_30d >= 0 ? '+' : ''}${wallet.pnl_30d.toFixed(2)}%`,
+    cumulativePnL: `${wallet.pnl_all_time >= 0 ? '+' : ''}${wallet.pnl_all_time.toLocaleString()}`,
+    copiers: wallet.total_trades.toString(),
+    winRatio: `${(wallet.win_rate * 100).toFixed(2)}%`,
+  })) || [];
 
   return (
     <section className="mb-8 sm:mb-12 lg:mb-16 px-0">
@@ -162,11 +146,34 @@ export default function AllTradersSection() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
-        {traders.map((trader, index) => (
-          <TraderCard key={index} {...trader} />
-        ))}
-      </div>
+      {isLoading && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="animate-pulse bg-[#101010] border border-[#292D32] rounded-lg h-64"></div>
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-900/20 border border-red-500 rounded-lg p-6 text-center">
+          <p className="text-red-500 font-semibold mb-2">Failed to load traders</p>
+          <p className="text-gray-400 text-sm">Please try again later</p>
+        </div>
+      )}
+
+      {!isLoading && !error && traders.length === 0 && (
+        <div className="bg-[#101010] border border-[#292D32] rounded-lg p-12 text-center">
+          <p className="text-white/60">No traders available at the moment</p>
+        </div>
+      )}
+
+      {!isLoading && !error && traders.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
+          {traders.map((trader: any, index: number) => (
+            <TraderCard key={index} {...trader} />
+          ))}
+        </div>
+      )}
     </section>
   );
 }

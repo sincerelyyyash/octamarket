@@ -3,6 +3,8 @@ use bb8::Pool;
 use bb8_postgres::PostgresConnectionManager;
 use tokio_postgres::NoTls;
 use crate::model::{MarketEvent, PlatformSource};
+use crate::wallet_tracker::TrackedWallet;
+use crate::wallet_sources::WalletTrade;
 use uuid::Uuid;
 use time::OffsetDateTime;
 
@@ -21,6 +23,10 @@ impl PostgresClient {
 
     pub async fn ensure_schema(&self) -> anyhow::Result<()> {
         let conn = self.pool.get().await?;
+        
+        // Enable UUID extension first
+        conn.batch_execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";").await?;
+        
         conn.batch_execute(
             r#"
             -- Aggregated events table
@@ -752,6 +758,202 @@ impl PostgresClient {
         
         Ok(history)
     }
+
+    // ---------- Wallet Tracking Methods ----------
+
+    /// Get all tracked wallets
+    pub async fn get_tracked_wallets(&self) -> anyhow::Result<Vec<TrackedWallet>> {
+        let conn = self.pool.get().await?;
+        
+        let rows = conn.query(
+            "SELECT id, wallet_address, platform, nickname, is_active FROM tracked_wallets WHERE is_active = true",
+            &[]
+        ).await?;
+        
+        let mut wallets = Vec::new();
+        for row in rows {
+            wallets.push(TrackedWallet {
+                id: row.get("id"),
+                wallet_address: row.get("wallet_address"),
+                platform: row.get("platform"),
+                nickname: row.get("nickname"),
+                is_active: row.get("is_active"),
+            });
+        }
+        
+        Ok(wallets)
+    }
+
+    /// Add a new wallet to track
+    pub async fn add_tracked_wallet(
+        &self,
+        wallet_address: &str,
+        platform: &str,
+        nickname: Option<&str>,
+    ) -> anyhow::Result<Uuid> {
+        let conn = self.pool.get().await?;
+        let wallet_id = Uuid::new_v4();
+        
+        conn.execute(
+            r#"
+            INSERT INTO tracked_wallets (id, wallet_address, platform, nickname, is_active)
+            VALUES ($1, $2, $3, $4, true)
+            ON CONFLICT (wallet_address) DO UPDATE SET
+                platform = EXCLUDED.platform,
+                nickname = EXCLUDED.nickname,
+                updated_at = NOW()
+            "#,
+            &[&wallet_id, &wallet_address, &platform, &nickname]
+        ).await?;
+        
+        // Initialize stats for this wallet
+        conn.execute(
+            "INSERT INTO wallet_stats (wallet_id) VALUES ($1) ON CONFLICT (wallet_id) DO NOTHING",
+            &[&wallet_id]
+        ).await?;
+        
+        Ok(wallet_id)
+    }
+
+    /// Store a wallet trade
+    pub async fn store_wallet_trade(&self, wallet_id: Uuid, trade: &WalletTrade) -> anyhow::Result<()> {
+        let conn = self.pool.get().await?;
+        let trade_id = Uuid::new_v4();
+        
+        // Check if trade already exists (by tx_hash or timestamp+market+amount)
+        let existing = if let Some(ref tx_hash) = trade.tx_hash {
+            conn.query_opt(
+                "SELECT id FROM wallet_trades WHERE tx_hash = $1",
+                &[&tx_hash]
+            ).await?
+        } else {
+            conn.query_opt(
+                "SELECT id FROM wallet_trades WHERE wallet_id = $1 AND market_id = $2 AND timestamp = $3 AND amount = $4",
+                &[&wallet_id, &trade.market_id, &trade.timestamp.to_string(), &trade.amount]
+            ).await?
+        };
+        
+        if existing.is_some() {
+            // Trade already stored, skip
+            return Ok(());
+        }
+        
+        conn.execute(
+            r#"
+            INSERT INTO wallet_trades (
+                id, wallet_id, platform, market_id, side, outcome_index, outcome_name,
+                price, amount, tx_hash, timestamp, raw_data
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            "#,
+            &[
+                &trade_id,
+                &wallet_id,
+                &trade.platform,
+                &trade.market_id,
+                &trade.side,
+                &trade.outcome_index,
+                &trade.outcome_name,
+                &trade.price,
+                &trade.amount,
+                &trade.tx_hash,
+                &trade.timestamp.to_string(),
+                &trade.raw_data
+            ]
+        ).await?;
+        
+        Ok(())
+    }
+
+    /// Calculate and update wallet statistics
+    pub async fn calculate_wallet_stats(&self, wallet_id: Uuid) -> anyhow::Result<()> {
+        let conn = self.pool.get().await?;
+        
+        // Calculate various statistics from wallet_trades
+        let stats = conn.query_one(
+            r#"
+            SELECT 
+                COUNT(*) as total_trades,
+                SUM(amount) as total_volume,
+                MAX(timestamp) as last_trade_at
+            FROM wallet_trades
+            WHERE wallet_id = $1
+            "#,
+            &[&wallet_id]
+        ).await?;
+        
+        let total_trades: i64 = stats.get("total_trades");
+        let total_volume: Option<f64> = stats.get("total_volume");
+        let last_trade_at: Option<String> = stats.get("last_trade_at");
+        
+        // Calculate average position size
+        let avg_position_size = if total_trades > 0 && total_volume.is_some() {
+            total_volume.unwrap() / total_trades as f64
+        } else {
+            0.0
+        };
+        
+        // For MVP, we'll set placeholder values for PnL and win rate
+        // In production, this would require matching trades with market outcomes
+        conn.execute(
+            r#"
+            UPDATE wallet_stats SET
+                total_trades = $1,
+                total_volume = $2,
+                avg_position_size = $3,
+                last_trade_at = $4,
+                last_updated = NOW()
+            WHERE wallet_id = $5
+            "#,
+            &[
+                &(total_trades as i32),
+                &total_volume.unwrap_or(0.0),
+                &avg_position_size,
+                &last_trade_at,
+                &wallet_id
+            ]
+        ).await?;
+        
+        Ok(())
+    }
+
+    /// Get wallet statistics
+    pub async fn get_wallet_stats(&self, wallet_id: Uuid) -> anyhow::Result<Option<WalletStats>> {
+        let conn = self.pool.get().await?;
+        
+        let row = conn.query_opt(
+            r#"
+            SELECT 
+                wallet_id, total_trades, win_count, loss_count, total_volume,
+                pnl_7d, pnl_30d, pnl_all_time, win_rate, avg_position_size,
+                largest_win, largest_loss, sharpe_ratio, last_trade_at, last_updated
+            FROM wallet_stats
+            WHERE wallet_id = $1
+            "#,
+            &[&wallet_id]
+        ).await?;
+        
+        if let Some(row) = row {
+            Ok(Some(WalletStats {
+                wallet_id: row.get("wallet_id"),
+                total_trades: row.get("total_trades"),
+                win_count: row.get("win_count"),
+                loss_count: row.get("loss_count"),
+                total_volume: row.get("total_volume"),
+                pnl_7d: row.get("pnl_7d"),
+                pnl_30d: row.get("pnl_30d"),
+                pnl_all_time: row.get("pnl_all_time"),
+                win_rate: row.get("win_rate"),
+                avg_position_size: row.get("avg_position_size"),
+                largest_win: row.get("largest_win"),
+                largest_loss: row.get("largest_loss"),
+                sharpe_ratio: row.get("sharpe_ratio"),
+                last_trade_at: row.get("last_trade_at"),
+                last_updated: row.get("last_updated"),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 // Helper structs for price data
@@ -784,6 +986,25 @@ pub struct PriceHistoryEntry {
     pub volume: Option<f64>,
     pub timestamp: String,
     pub source_data: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct WalletStats {
+    pub wallet_id: Uuid,
+    pub total_trades: i32,
+    pub win_count: i32,
+    pub loss_count: i32,
+    pub total_volume: f64,
+    pub pnl_7d: f64,
+    pub pnl_30d: f64,
+    pub pnl_all_time: f64,
+    pub win_rate: f64,
+    pub avg_position_size: f64,
+    pub largest_win: f64,
+    pub largest_loss: f64,
+    pub sharpe_ratio: Option<f64>,
+    pub last_trade_at: Option<String>,
+    pub last_updated: String,
 }
 
 

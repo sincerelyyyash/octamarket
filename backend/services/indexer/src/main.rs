@@ -12,6 +12,8 @@ mod price_fetcher;
 mod rate_limiter;
 mod retry;
 mod health;
+mod wallet_tracker;
+mod wallet_sources;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

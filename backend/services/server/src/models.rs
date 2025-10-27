@@ -2,25 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-// ---------- Auth Models
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RegisterRequest {
-    pub email: String,
-    pub password: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoginRequest {
-    pub email: String,
-    pub password: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthResponse {
-    pub token: String,
-    pub user_id: String,
-}
+// ==================== User Models ====================
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
@@ -30,201 +12,288 @@ pub struct User {
     pub created_at: DateTime<Utc>,
 }
 
-// ---------- Leader Models
+#[derive(Debug, Deserialize)]
+pub struct RegisterRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthResponse {
+    pub token: String,
+    pub user_id: String,
+}
+
+// ==================== Market Aggregation Models ====================
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct Leader {
+pub struct AggregatedMarketView {
+    pub event_fingerprint: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub end_time: Option<String>,
+    pub status: String,
+    pub source_count: Option<i64>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct MarketSourceView {
+    pub id: String,
+    pub source: String,
+    pub market_id: String,
+    pub market_slug: Option<String>,
+    pub name: Option<String>,
+    pub status: Option<String>,
+    pub outcomes: Option<serde_json::Value>,
+    pub prices: Option<serde_json::Value>,
+    pub traded_amount: Option<f64>,
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct BestPrice {
+    pub event_fingerprint: String,
+    pub event_title: String,
+    pub best_yes_price: Option<f64>,
+    pub best_yes_platform: Option<String>,
+    pub best_yes_market_id: Option<String>,
+    pub best_no_price: Option<f64>,
+    pub best_no_platform: Option<String>,
+    pub best_no_market_id: Option<String>,
+    pub last_updated: DateTime<Utc>,
+}
+
+// ==================== Arbitrage Models ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ArbitrageAlert {
+    pub id: String,
+    pub event_fingerprint: String,
+    pub event_title: String,
+    pub opportunity_type: String,
+    pub profit_pct: f64,
+    pub profit_amount_usd: Option<f64>,
+    pub buy_platform: String,
+    pub buy_market_id: String,
+    pub buy_outcome: String,
+    pub buy_price: f64,
+    pub sell_platform: String,
+    pub sell_market_id: String,
+    pub sell_outcome: String,
+    pub sell_price: f64,
+    pub min_capital_required: Option<f64>,
+    pub detected_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArbitrageOpportunity {
+    pub event_fingerprint: String,
+    pub event_title: String,
+    pub profit_pct: f64,
+    pub buy_side: TradeSide,
+    pub sell_side: TradeSide,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeSide {
+    pub platform: String,
+    pub market_id: String,
+    pub outcome: String,
+    pub price: f64,
+}
+
+// ==================== Order Models ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct UserOrder {
+    pub id: String,
+    pub user_id: String,
+    pub platform: String,
+    pub market_id: String,
+    pub event_fingerprint: Option<String>,
+    pub side: String,
+    pub outcome: String,
+    pub outcome_index: Option<i32>,
+    pub price: f64,
+    pub amount: f64,
+    pub order_type: String,
+    pub status: String,
+    pub filled_amount: Option<f64>,
+    pub avg_fill_price: Option<f64>,
+    pub tx_hash: Option<String>,
+    pub venue_order_id: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaceOrderRequest {
+    pub market_id: String,
+    pub platform: Option<String>, // If None, use best price
+    pub side: String, // "buy" or "sell"
+    pub outcome: String,
+    pub price: f64,
+    pub amount: f64,
+    pub order_type: String, // "market" or "limit"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderResponse {
+    pub order_id: String,
+    pub status: String,
+    pub message: Option<String>,
+}
+
+// ==================== Position Models ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct UserPosition {
+    pub id: String,
+    pub user_id: String,
+    pub platform: String,
+    pub market_id: String,
+    pub event_fingerprint: Option<String>,
+    pub outcome: String,
+    pub outcome_index: Option<i32>,
+    pub side: String,
+    pub quantity: f64,
+    pub avg_entry_price: f64,
+    pub current_price: Option<f64>,
+    pub unrealized_pnl: f64,
+    pub realized_pnl: f64,
+    pub total_cost: f64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+// ==================== Wallet Models ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct UserWallet {
+    pub id: String,
+    pub user_id: String,
+    pub platform: String,
+    pub wallet_address: String,
+    pub is_primary: bool,
+    pub is_verified: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectWalletRequest {
+    pub platform: String,
+    pub wallet_address: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct WalletLeaderboardEntry {
+    pub wallet_address: String,
+    pub platform: String,
+    pub nickname: Option<String>,
+    pub total_trades: i32,
+    pub win_count: i32,
+    pub loss_count: i32,
+    pub total_volume: f64,
+    pub pnl_7d: f64,
+    pub pnl_30d: f64,
+    pub pnl_all_time: f64,
+    pub win_rate: f64,
+    pub avg_position_size: f64,
+    pub last_trade_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct WalletTradeView {
+    pub platform: String,
+    pub market_id: String,
+    pub side: String,
+    pub outcome_name: Option<String>,
+    pub price: f64,
+    pub amount: f64,
+    pub tx_hash: Option<String>,
+    pub timestamp: String,
+}
+
+// ==================== Leader Models ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct LeaderWithStats {
     pub leader_id: String,
+    pub wallet_address: String,
+    pub platform: String,
     pub name: String,
-    pub pnl7d: f64,
-    pub followers: i32,
-    pub is_live: bool,
+    pub bio: Option<String>,
+    pub avatar_url: Option<String>,
+    pub is_verified: bool,
+    pub followers_count: i32,
+    pub pnl_7d: f64,
+    pub pnl_30d: f64,
+    pub win_rate: f64,
+    pub total_trades: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaderDetail {
     pub leader_id: String,
+    pub wallet_address: String,
+    pub platform: String,
     pub name: String,
-    pub stats: Stats,
+    pub bio: Option<String>,
+    pub avatar_url: Option<String>,
+    pub is_verified: bool,
+    pub followers_count: i32,
+    pub stats: LeaderStats,
     pub markets: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct Stats {
-    pub pnl7d: f64,
-    pub pnl30d: f64,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeaderStats {
+    pub pnl_7d: f64,
+    pub pnl_30d: f64,
+    pub pnl_all_time: f64,
     pub win_rate: f64,
-}
-
-// ---------- Follow Models
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FollowCreate {
-    pub leader_id: String,
-    pub base_allocation_usdc: f64,
-    pub max_utilization_pct: f64,
-    pub max_per_trade_pct: f64,
-    pub slippage_bps: i32,
-    pub auto_close_with_leader: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct FollowUpdate {
-    #[serde(default)]
-    pub max_utilization_pct: Option<f64>,
-    #[serde(default)]
-    pub max_per_trade_pct: Option<f64>,
-    #[serde(default)]
-    pub slippage_bps: Option<i32>,
-    #[serde(default)]
-    pub auto_close_with_leader: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct Follow {
-    pub follow_id: String,
-    pub user_id: String,
-    pub leader_id: String,
-    pub base_allocation_usdc: f64,
-    pub max_utilization_pct: f64,
-    pub max_per_trade_pct: f64,
-    pub slippage_bps: i32,
-    pub auto_close_with_leader: bool,
-    pub status: String,
-    pub utilized_usdc: f64,
-    pub created_at: DateTime<Utc>,
+    pub total_trades: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FollowView {
-    pub follow_id: String,
-    pub leader_id: String,
-    pub base_allocation_usdc: f64,
-    pub utilization_now_pct: f64,
-    pub status: String,
+pub struct TrackLeaderRequest {
+    pub wallet_address: String,
+    pub platform: String,
+    pub nickname: Option<String>,
+}
+
+// ==================== Helper Models ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuccessResponse {
+    pub success: bool,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Unfollow {
-    pub leader_id: String,
-    pub action: String, // "pause" | "stop"
+pub struct PaginationParams {
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
 }
 
-// ---------- Trade Event Models
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LeaderTradeEvent {
-    pub idempotency_key: String,
-    pub leader_id: String,
-    pub venue: String,
-    pub market_id: String,
-    pub side: String, // "buy" | "sell"
-    pub price: Option<f64>,
-    pub notional_usdc: f64,
-    pub ts: String,
-}
-
-// ---------- Job Models
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct ReplicationJob {
-    pub job_id: String,
-    pub follow_id: String,
-    pub user_id: String,
-    pub leader_id: String,
-    pub venue: String,
-    pub market_id: String,
-    pub side: String,
-    pub size_usdc: f64,
-    pub slippage_bps: i32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReplicationComplete {
-    pub status: String, // "filled" | "partial" | "skipped" | "failed"
-    pub filled_usdc: Option<f64>,
-    pub avg_price: Option<f64>,
-    pub venue_order_id: Option<String>,
-    pub tx_hash: Option<String>,
-    pub reason: Option<String>,
-}
-
-// ---------- Position Models
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct Position {
-    pub market_id: String,
-    pub side: String,
-    pub size_usdc: f64,
-    pub avg_price: f64,
-    pub unrealized: f64,
-}
-
-// ---------- Order Models
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct Order {
-    pub id: String,
-    pub user_id: String,
-    pub leader_id: String,
-    pub market_id: String,
-    pub side: String,
-    pub size_usdc: f64,
-    pub status: String,
-    pub filled_usdc: Option<f64>,
-    pub avg_price: Option<f64>,
-    pub created_at: DateTime<Utc>,
-}
-
-// ---------- Request/Response Models
-
-#[derive(Deserialize)]
-pub struct FollowsMeQuery {
-    #[allow(dead_code)]
-    pub limit: Option<usize>,
-}
-
-#[derive(Deserialize)]
-pub struct JobsQuery {
-    #[allow(dead_code)]
-    pub status: Option<String>, // "pending"
-}
-
-#[derive(Deserialize)]
-pub struct CloseAllReq {
-    #[allow(dead_code)]
-    pub mode: String,
-    #[allow(dead_code)]
-    pub slippage_bps: i32,
-}
-
-// ---------- Helper functions
-
-impl FollowCreate {
-    pub fn validate(&self) -> Result<(), String> {
-        if !(0.0..=1.0).contains(&self.max_utilization_pct) {
-            return Err("maxUtilizationPct must be within [0,1]".into());
+impl Default for PaginationParams {
+    fn default() -> Self {
+        Self {
+            page: Some(1),
+            limit: Some(50),
         }
-        if !(0.0..=1.0).contains(&self.max_per_trade_pct) {
-            return Err("maxPerTradePct must be within [0,1]".into());
-        }
-        Ok(())
     }
 }
 
-impl FollowUpdate {
-    pub fn validate(&self) -> Result<(), String> {
-        if let Some(v) = self.max_utilization_pct {
-            if !(0.0..=1.0).contains(&v) {
-                return Err("maxUtilizationPct must be within [0,1]".into());
-            }
-        }
-        if let Some(v) = self.max_per_trade_pct {
-            if !(0.0..=1.0).contains(&v) {
-                return Err("maxPerTradePct must be within [0,1]".into());
-            }
-        }
-        Ok(())
-    }
-}
 

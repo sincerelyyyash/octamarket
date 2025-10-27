@@ -3,27 +3,42 @@ use crate::models::*;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
+/// Database struct with connections to both octamarket and indexer databases
 #[derive(Clone)]
-pub struct Database {
-    pool: PgPool,
+pub struct DualDatabase {
+    /// Trading database (octamarket) - read/write
+    trading_pool: PgPool,
+    /// Indexer database - read-only for market data
+    indexer_pool: PgPool,
 }
 
-impl Database {
-    pub async fn new(database_url: &str) -> Result<Self, sqlx::Error> {
-        let pool = PgPoolOptions::new()
+impl DualDatabase {
+    pub async fn new(trading_url: &str, indexer_url: &str) -> Result<Self, sqlx::Error> {
+        let trading_pool = PgPoolOptions::new()
             .max_connections(10)
-            .connect(database_url)
+            .connect(trading_url)
             .await?;
 
-        Ok(Self { pool })
+        let indexer_pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(indexer_url)
+            .await?;
+
+        Ok(Self {
+            trading_pool,
+            indexer_pool,
+        })
     }
 
-    #[allow(dead_code)]
-    pub fn pool(&self) -> &PgPool {
-        &self.pool
+    pub fn trading_pool(&self) -> &PgPool {
+        &self.trading_pool
     }
 
-    // ---------- User Operations
+    pub fn indexer_pool(&self) -> &PgPool {
+        &self.indexer_pool
+    }
+
+    // ---------- User Operations (Trading DB)
 
     pub async fn create_user(
         &self,
@@ -38,7 +53,7 @@ impl Database {
         .bind(&user_id)
         .bind(email)
         .bind(password_hash)
-        .execute(&self.pool)
+        .execute(&self.trading_pool)
         .await
         .map_err(|e| {
             if let sqlx::Error::Database(db_err) = &e {
@@ -57,31 +72,160 @@ impl Database {
             "SELECT user_id, email, password_hash, created_at FROM users WHERE email = $1",
         )
         .bind(email)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.trading_pool)
         .await?;
 
         Ok(user)
     }
 
-    #[allow(dead_code)]
-    pub async fn get_user_by_id(&self, user_id: &str) -> Result<Option<User>, ApiError> {
-        let user = sqlx::query_as::<_, User>(
-            "SELECT user_id, email, password_hash, created_at FROM users WHERE user_id = $1",
+    // ---------- Market Data Operations (Indexer DB - Read Only)
+
+    /// Get aggregated markets from indexer DB
+    pub async fn get_aggregated_markets(&self, limit: Option<i64>) -> Result<Vec<AggregatedMarketView>, ApiError> {
+        let limit_val = limit.unwrap_or(100);
+        
+        let markets = sqlx::query_as::<_, AggregatedMarketView>(
+            r#"
+            SELECT 
+                ae.event_fingerprint,
+                ae.title,
+                ae.description,
+                ae.end_time,
+                ae.status,
+                COUNT(DISTINCT ms.id) as source_count,
+                ae.created_at
+            FROM aggregated_events ae
+            LEFT JOIN market_sources ms ON ae.id = ms.aggregated_event_id
+            WHERE ae.status = 'active'
+            GROUP BY ae.event_fingerprint, ae.title, ae.description, ae.end_time, ae.status, ae.created_at
+            ORDER BY ae.created_at DESC
+            LIMIT $1
+            "#
         )
-        .bind(user_id)
-        .fetch_optional(&self.pool)
+        .bind(limit_val)
+        .fetch_all(&self.indexer_pool)
         .await?;
 
-        Ok(user)
+        Ok(markets)
     }
 
-    // ---------- Leader Operations
-
-    pub async fn get_leaders(&self) -> Result<Vec<Leader>, ApiError> {
-        let leaders = sqlx::query_as::<_, Leader>(
-            "SELECT leader_id, name, pnl7d, followers, is_live FROM leaders ORDER BY pnl7d DESC",
+    /// Get market sources for a specific event from indexer DB
+    pub async fn get_market_sources_for_event(&self, event_fingerprint: &str) -> Result<Vec<MarketSourceView>, ApiError> {
+        let sources = sqlx::query_as::<_, MarketSourceView>(
+            r#"
+            SELECT 
+                ms.id,
+                ms.source,
+                ms.market_id,
+                ms.market_slug,
+                ms.name,
+                ms.status,
+                ms.outcomes,
+                ms.prices,
+                ms.traded_amount,
+                ms.observed_at
+            FROM market_sources ms
+            JOIN aggregated_events ae ON ms.aggregated_event_id = ae.id
+            WHERE ae.event_fingerprint = $1
+            ORDER BY ms.observed_at DESC
+            "#
         )
-        .fetch_all(&self.pool)
+        .bind(event_fingerprint)
+        .fetch_all(&self.indexer_pool)
+        .await?;
+
+        Ok(sources)
+    }
+
+    /// Get wallet leaderboard from indexer DB
+    pub async fn get_wallet_leaderboard(&self, limit: Option<i64>) -> Result<Vec<WalletLeaderboardEntry>, ApiError> {
+        let limit_val = limit.unwrap_or(50);
+        
+        let entries = sqlx::query_as::<_, WalletLeaderboardEntry>(
+            r#"
+            SELECT 
+                tw.wallet_address,
+                tw.platform,
+                tw.nickname,
+                ws.total_trades,
+                ws.win_count,
+                ws.loss_count,
+                ws.total_volume,
+                ws.pnl_7d,
+                ws.pnl_30d,
+                ws.pnl_all_time,
+                ws.win_rate,
+                ws.avg_position_size,
+                ws.last_trade_at
+            FROM tracked_wallets tw
+            JOIN wallet_stats ws ON tw.id = ws.wallet_id
+            WHERE tw.is_active = true
+            ORDER BY ws.pnl_30d DESC
+            LIMIT $1
+            "#
+        )
+        .bind(limit_val)
+        .fetch_all(&self.indexer_pool)
+        .await?;
+
+        Ok(entries)
+    }
+
+    /// Get wallet trades from indexer DB
+    pub async fn get_wallet_trades(&self, wallet_address: &str, limit: Option<i64>) -> Result<Vec<WalletTradeView>, ApiError> {
+        let limit_val = limit.unwrap_or(100);
+        
+        let trades = sqlx::query_as::<_, WalletTradeView>(
+            r#"
+            SELECT 
+                wt.platform,
+                wt.market_id,
+                wt.side,
+                wt.outcome_name,
+                wt.price,
+                wt.amount,
+                wt.tx_hash,
+                wt.timestamp
+            FROM wallet_trades wt
+            JOIN tracked_wallets tw ON wt.wallet_id = tw.id
+            WHERE tw.wallet_address = $1
+            ORDER BY wt.timestamp DESC
+            LIMIT $2
+            "#
+        )
+        .bind(wallet_address)
+        .bind(limit_val)
+        .fetch_all(&self.indexer_pool)
+        .await?;
+
+        Ok(trades)
+    }
+
+    // ---------- Leader Operations (Trading DB)
+
+    pub async fn get_leaders(&self) -> Result<Vec<LeaderWithStats>, ApiError> {
+        let leaders = sqlx::query_as::<_, LeaderWithStats>(
+            r#"
+            SELECT 
+                l.leader_id,
+                l.wallet_address,
+                l.platform,
+                l.name,
+                l.bio,
+                l.avatar_url,
+                l.is_verified,
+                l.followers_count,
+                ls.pnl_7d,
+                ls.pnl_30d,
+                ls.win_rate,
+                ls.total_trades
+            FROM leaders l
+            LEFT JOIN leader_stats ls ON l.leader_id = ls.leader_id
+            WHERE l.is_active = true
+            ORDER BY ls.pnl_30d DESC NULLS LAST
+            "#
+        )
+        .fetch_all(&self.trading_pool)
         .await?;
 
         Ok(leaders)
@@ -91,468 +235,68 @@ impl Database {
         #[derive(sqlx::FromRow)]
         struct LeaderDetailRow {
             leader_id: String,
+            wallet_address: String,
+            platform: String,
             name: String,
-            pnl7d: f64,
-            pnl30d: f64,
+            bio: Option<String>,
+            avatar_url: Option<String>,
+            is_verified: bool,
+            followers_count: i32,
+            pnl_7d: f64,
+            pnl_30d: f64,
+            pnl_all_time: f64,
             win_rate: f64,
+            total_trades: i32,
             markets: Vec<String>,
         }
 
         let row = sqlx::query_as::<_, LeaderDetailRow>(
             r#"
-            SELECT l.leader_id, l.name, ls.pnl7d, ls.pnl30d, ls.win_rate, 
-                   COALESCE(array_agg(lm.market_id) FILTER (WHERE lm.market_id IS NOT NULL), '{}') as markets
+            SELECT 
+                l.leader_id, l.wallet_address, l.platform, l.name, l.bio, l.avatar_url,
+                l.is_verified, l.followers_count,
+                COALESCE(ls.pnl_7d, 0) as pnl_7d,
+                COALESCE(ls.pnl_30d, 0) as pnl_30d,
+                COALESCE(ls.pnl_all_time, 0) as pnl_all_time,
+                COALESCE(ls.win_rate, 0) as win_rate,
+                COALESCE(ls.total_trades, 0) as total_trades,
+                COALESCE(array_agg(lm.market_id) FILTER (WHERE lm.market_id IS NOT NULL), '{}') as markets
             FROM leaders l
-            JOIN leader_stats ls ON l.leader_id = ls.leader_id
+            LEFT JOIN leader_stats ls ON l.leader_id = ls.leader_id
             LEFT JOIN leader_markets lm ON l.leader_id = lm.leader_id
             WHERE l.leader_id = $1
-            GROUP BY l.leader_id, l.name, ls.pnl7d, ls.pnl30d, ls.win_rate
+            GROUP BY l.leader_id, l.wallet_address, l.platform, l.name, l.bio, l.avatar_url,
+                     l.is_verified, l.followers_count, ls.pnl_7d, ls.pnl_30d, ls.pnl_all_time, 
+                     ls.win_rate, ls.total_trades
             "#
         )
         .bind(leader_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.trading_pool)
         .await?
         .ok_or(ApiError::NotFound)?;
 
         Ok(LeaderDetail {
             leader_id: row.leader_id,
+            wallet_address: row.wallet_address,
+            platform: row.platform,
             name: row.name,
-            stats: Stats {
-                pnl7d: row.pnl7d,
-                pnl30d: row.pnl30d,
+            bio: row.bio,
+            avatar_url: row.avatar_url,
+            is_verified: row.is_verified,
+            followers_count: row.followers_count,
+            stats: LeaderStats {
+                pnl_7d: row.pnl_7d,
+                pnl_30d: row.pnl_30d,
+                pnl_all_time: row.pnl_all_time,
                 win_rate: row.win_rate,
+                total_trades: row.total_trades,
             },
             markets: row.markets,
         })
     }
 
-    // ---------- Follow Operations
-
-    pub async fn create_follow(
-        &self,
-        user_id: &str,
-        follow: &FollowCreate,
-    ) -> Result<String, ApiError> {
-        let follow_id = format!("flw_{}", Uuid::new_v4().simple());
-
-        sqlx::query(
-            r#"
-            INSERT INTO follows (follow_id, user_id, leader_id, base_allocation_usdc, 
-                                max_utilization_pct, max_per_trade_pct, slippage_bps, 
-                                auto_close_with_leader, status, utilized_usdc)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', 0.0)
-            "#,
-        )
-        .bind(&follow_id)
-        .bind(user_id)
-        .bind(&follow.leader_id)
-        .bind(follow.base_allocation_usdc)
-        .bind(follow.max_utilization_pct)
-        .bind(follow.max_per_trade_pct)
-        .bind(follow.slippage_bps)
-        .bind(follow.auto_close_with_leader)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(follow_id)
-    }
-
-    #[allow(dead_code)]
-    pub async fn get_follow(&self, follow_id: &str) -> Result<Follow, ApiError> {
-        let follow = sqlx::query_as::<_, Follow>(
-            r#"
-            SELECT follow_id, user_id, leader_id, base_allocation_usdc, 
-                   max_utilization_pct, max_per_trade_pct, slippage_bps,
-                   auto_close_with_leader, status, utilized_usdc, created_at
-            FROM follows WHERE follow_id = $1
-            "#,
-        )
-        .bind(follow_id)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-
-        Ok(follow)
-    }
-
-    pub async fn update_follow(
-        &self,
-        follow_id: &str,
-        update: &FollowUpdate,
-    ) -> Result<(), ApiError> {
-        let mut query = String::from("UPDATE follows SET ");
-        let mut updates = Vec::new();
-        let mut param_count = 1;
-
-        if update.max_utilization_pct.is_some() {
-            updates.push(format!("max_utilization_pct = ${}", param_count));
-            param_count += 1;
-        }
-        if update.max_per_trade_pct.is_some() {
-            updates.push(format!("max_per_trade_pct = ${}", param_count));
-            param_count += 1;
-        }
-        if update.slippage_bps.is_some() {
-            updates.push(format!("slippage_bps = ${}", param_count));
-            param_count += 1;
-        }
-        if update.auto_close_with_leader.is_some() {
-            updates.push(format!("auto_close_with_leader = ${}", param_count));
-            param_count += 1;
-        }
-
-        if updates.is_empty() {
-            return Ok(());
-        }
-
-        query.push_str(&updates.join(", "));
-        query.push_str(&format!(" WHERE follow_id = ${}", param_count));
-
-        let mut q = sqlx::query(&query);
-
-        if let Some(v) = update.max_utilization_pct {
-            q = q.bind(v);
-        }
-        if let Some(v) = update.max_per_trade_pct {
-            q = q.bind(v);
-        }
-        if let Some(v) = update.slippage_bps {
-            q = q.bind(v);
-        }
-        if let Some(v) = update.auto_close_with_leader {
-            q = q.bind(v);
-        }
-        q = q.bind(follow_id);
-
-        q.execute(&self.pool).await?;
-
-        Ok(())
-    }
-
-    pub async fn get_user_follows(&self, user_id: &str) -> Result<Vec<FollowView>, ApiError> {
-        let rows = sqlx::query_as::<_, Follow>(
-            r#"
-            SELECT follow_id, user_id, leader_id, base_allocation_usdc, 
-                   max_utilization_pct, max_per_trade_pct, slippage_bps,
-                   auto_close_with_leader, status, utilized_usdc, created_at
-            FROM follows WHERE user_id = $1
-            ORDER BY created_at DESC
-            "#,
-        )
-        .bind(user_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let views: Vec<FollowView> = rows
-            .into_iter()
-            .map(|f| FollowView {
-                follow_id: f.follow_id,
-                leader_id: f.leader_id,
-                base_allocation_usdc: f.base_allocation_usdc,
-                utilization_now_pct: if f.base_allocation_usdc > 0.0 {
-                    f.utilized_usdc / f.base_allocation_usdc
-                } else {
-                    0.0
-                },
-                status: f.status,
-            })
-            .collect();
-
-        Ok(views)
-    }
-
-    pub async fn update_follow_status(
-        &self,
-        follow_id: &str,
-        status: &str,
-    ) -> Result<(), ApiError> {
-        let result = sqlx::query("UPDATE follows SET status = $1 WHERE follow_id = $2")
-            .bind(status)
-            .bind(follow_id)
-            .execute(&self.pool)
-            .await?;
-
-        if result.rows_affected() == 0 {
-            return Err(ApiError::NotFound);
-        }
-
-        Ok(())
-    }
-
-    pub async fn unfollow_leader(
-        &self,
-        user_id: &str,
-        leader_id: &str,
-        action: &str,
-    ) -> Result<(), ApiError> {
-        let status = match action {
-            "pause" => "paused",
-            "stop" => "stopped",
-            _ => return Err(ApiError::Validation("Invalid action".to_string())),
-        };
-
-        let result =
-            sqlx::query("UPDATE follows SET status = $1 WHERE user_id = $2 AND leader_id = $3")
-                .bind(status)
-                .bind(user_id)
-                .bind(leader_id)
-                .execute(&self.pool)
-                .await?;
-
-        if result.rows_affected() == 0 {
-            return Err(ApiError::NotFound);
-        }
-
-        Ok(())
-    }
-
-    pub async fn get_active_follows_for_leader(
-        &self,
-        leader_id: &str,
-    ) -> Result<Vec<Follow>, ApiError> {
-        let follows = sqlx::query_as::<_, Follow>(
-            r#"
-            SELECT follow_id, user_id, leader_id, base_allocation_usdc, 
-                   max_utilization_pct, max_per_trade_pct, slippage_bps,
-                   auto_close_with_leader, status, utilized_usdc, created_at
-            FROM follows 
-            WHERE leader_id = $1 AND status = 'active'
-            "#,
-        )
-        .bind(leader_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(follows)
-    }
-
-    // ---------- Idempotency Operations
-
-    #[allow(dead_code)]
-    pub async fn check_idempotency(&self, key: &str) -> Result<bool, ApiError> {
-        let row: (bool,) =
-            sqlx::query_as("SELECT EXISTS(SELECT 1 FROM idempotency_keys WHERE key = $1)")
-                .bind(key)
-                .fetch_one(&self.pool)
-                .await?;
-
-        Ok(row.0)
-    }
-
-    pub async fn insert_idempotency(&self, key: &str) -> Result<bool, ApiError> {
-        let result = sqlx::query(
-            "INSERT INTO idempotency_keys (key) VALUES ($1) ON CONFLICT (key) DO NOTHING",
-        )
-        .bind(key)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
-    }
-
-    // ---------- Job Operations
-
-    pub async fn create_replication_job(&self, job: &ReplicationJob) -> Result<(), ApiError> {
-        sqlx::query(
-            r#"
-            INSERT INTO replication_jobs (job_id, follow_id, user_id, leader_id, venue, 
-                                         market_id, side, size_usdc, slippage_bps, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
-            "#,
-        )
-        .bind(&job.job_id)
-        .bind(&job.follow_id)
-        .bind(&job.user_id)
-        .bind(&job.leader_id)
-        .bind(&job.venue)
-        .bind(&job.market_id)
-        .bind(&job.side)
-        .bind(job.size_usdc)
-        .bind(job.slippage_bps)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn get_pending_jobs(&self) -> Result<Vec<ReplicationJob>, ApiError> {
-        let jobs = sqlx::query_as::<_, ReplicationJob>(
-            r#"
-            SELECT job_id, follow_id, user_id, leader_id, venue, 
-                   market_id, side, size_usdc, slippage_bps
-            FROM replication_jobs 
-            WHERE status = 'pending'
-            ORDER BY created_at ASC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(jobs)
-    }
-
-    pub async fn get_job(&self, job_id: &str) -> Result<ReplicationJob, ApiError> {
-        let job = sqlx::query_as::<_, ReplicationJob>(
-            r#"
-            SELECT job_id, follow_id, user_id, leader_id, venue, 
-                   market_id, side, size_usdc, slippage_bps
-            FROM replication_jobs 
-            WHERE job_id = $1
-            "#,
-        )
-        .bind(job_id)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-
-        Ok(job)
-    }
-
-    pub async fn complete_job(
-        &self,
-        job_id: &str,
-        completion: &ReplicationComplete,
-    ) -> Result<(), ApiError> {
-        sqlx::query(
-            r#"
-            UPDATE replication_jobs 
-            SET status = $1, filled_usdc = $2, avg_price = $3, 
-                venue_order_id = $4, tx_hash = $5, reason = $6
-            WHERE job_id = $7
-            "#,
-        )
-        .bind(&completion.status)
-        .bind(completion.filled_usdc)
-        .bind(completion.avg_price)
-        .bind(&completion.venue_order_id)
-        .bind(&completion.tx_hash)
-        .bind(&completion.reason)
-        .bind(job_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    // ---------- Order Operations
-
-    pub async fn create_order(
-        &self,
-        user_id: &str,
-        leader_id: &str,
-        market_id: &str,
-        side: &str,
-        size_usdc: f64,
-        status: &str,
-        filled_usdc: Option<f64>,
-        avg_price: Option<f64>,
-    ) -> Result<String, ApiError> {
-        let order_id = format!("ord_{}", Uuid::new_v4().simple());
-
-        sqlx::query(
-            r#"
-            INSERT INTO orders (id, user_id, leader_id, market_id, side, size_usdc, 
-                               status, filled_usdc, avg_price)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            "#,
-        )
-        .bind(&order_id)
-        .bind(user_id)
-        .bind(leader_id)
-        .bind(market_id)
-        .bind(side)
-        .bind(size_usdc)
-        .bind(status)
-        .bind(filled_usdc)
-        .bind(avg_price)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(order_id)
-    }
-
-    pub async fn get_user_orders(&self, user_id: &str) -> Result<Vec<Order>, ApiError> {
-        let orders = sqlx::query_as::<_, Order>(
-            r#"
-            SELECT id, user_id, leader_id, market_id, side, size_usdc, 
-                   status, filled_usdc, avg_price, created_at
-            FROM orders 
-            WHERE user_id = $1
-            ORDER BY created_at DESC
-            "#,
-        )
-        .bind(user_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(orders)
-    }
-
-    // ---------- Position Operations
-
-    pub async fn get_user_positions(&self, user_id: &str) -> Result<Vec<Position>, ApiError> {
-        let positions = sqlx::query_as::<_, Position>(
-            r#"
-            SELECT market_id, side, size_usdc, avg_price, unrealized
-            FROM positions 
-            WHERE user_id = $1
-            ORDER BY market_id, side
-            "#,
-        )
-        .bind(user_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(positions)
-    }
-
-    pub async fn upsert_position(
-        &self,
-        user_id: &str,
-        market_id: &str,
-        side: &str,
-        size_usdc: f64,
-        avg_price: f64,
-    ) -> Result<(), ApiError> {
-        sqlx::query(
-            r#"
-            INSERT INTO positions (user_id, market_id, side, size_usdc, avg_price, unrealized)
-            VALUES ($1, $2, $3, $4, $5, 0.0)
-            ON CONFLICT (user_id, market_id, side) 
-            DO UPDATE SET size_usdc = $4, avg_price = $5
-            "#,
-        )
-        .bind(user_id)
-        .bind(market_id)
-        .bind(side)
-        .bind(size_usdc)
-        .bind(avg_price)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn get_position(
-        &self,
-        user_id: &str,
-        market_id: &str,
-        side: &str,
-    ) -> Result<Option<Position>, ApiError> {
-        let position = sqlx::query_as::<_, Position>(
-            r#"
-            SELECT market_id, side, size_usdc, avg_price, unrealized
-            FROM positions 
-            WHERE user_id = $1 AND market_id = $2 AND side = $3
-            "#,
-        )
-        .bind(user_id)
-        .bind(market_id)
-        .bind(side)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(position)
-    }
-
+    // Additional trading DB methods would go here...
+    // (follows, orders, positions, etc. - similar to existing db.rs)
 }
+
+

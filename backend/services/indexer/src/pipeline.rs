@@ -6,6 +6,8 @@ use crate::sources::{augur::AugurSource, kalshi::KalshiSource, polymarket::Polym
 use crate::price_indexer::PriceIndexer;
 use crate::price_fetcher::PriceFetcher;
 use crate::health::HealthMonitor;
+use crate::wallet_tracker::WalletTracker;
+use crate::wallet_sources::{polymarket::PolymarketWalletSource, WalletSource};
 
 pub struct IndexerPipeline {
     cfg: AppConfig,
@@ -13,6 +15,7 @@ pub struct IndexerPipeline {
     price_indexer: PriceIndexer,
     price_fetcher: PriceFetcher,
     health_monitor: HealthMonitor,
+    wallet_tracker: Option<WalletTracker>,
 }
 
 impl IndexerPipeline {
@@ -23,12 +26,22 @@ impl IndexerPipeline {
         let price_fetcher = PriceFetcher::new(PostgresClient::new(&cfg.postgres_url).await?);
         let health_monitor = HealthMonitor::new();
         
+        // Initialize wallet tracker if enabled
+        let wallet_tracker = if cfg.enable_wallet_tracking.unwrap_or(false) {
+            let mut tracker = WalletTracker::new(PostgresClient::new(&cfg.postgres_url).await?);
+            tracker.initialize().await?;
+            Some(tracker)
+        } else {
+            None
+        };
+        
         Ok(Self { 
             cfg,
             postgres,
             price_indexer,
             price_fetcher,
             health_monitor,
+            wallet_tracker,
         })
     }
 
@@ -41,6 +54,30 @@ impl IndexerPipeline {
                 tracing::error!(error = %e, "Periodic price fetching failed");
             }
         });
+
+        // Start wallet tracking if enabled
+        if let Some(ref wallet_tracker) = self.wallet_tracker {
+            tracing::info!("Wallet tracking is enabled");
+            
+            // Start wallet tracking in background
+            let wallet_tracker_clone = wallet_tracker.clone();
+            tokio::spawn(async move {
+                let sources: Vec<Box<dyn WalletSource>> = vec![
+                    Box::new(PolymarketWalletSource::new()),
+                ];
+                
+                if let Err(e) = wallet_tracker_clone.start_tracking(sources).await {
+                    tracing::error!(error = %e, "Wallet tracking failed");
+                }
+            });
+            
+            // Start periodic stats updates
+            let wallet_tracker_clone = wallet_tracker.clone();
+            let stats_interval = self.cfg.wallet_stats_update_interval_seconds.unwrap_or(300);
+            tokio::spawn(async move {
+                wallet_tracker_clone.start_periodic_stats_update(stats_interval).await;
+            });
+        }
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<MarketEvent>(1024);
         let mut backpressure_count = 0;

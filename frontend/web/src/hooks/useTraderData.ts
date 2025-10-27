@@ -1,56 +1,49 @@
-import { useState, useEffect } from 'react';
+import { useLeaderDetail } from '@/lib/api';
 import { TraderData } from '@/types/trader';
 
-// Mock data - in a real app, this would fetch from an API
-const mockTraderData: TraderData = {
-  id: 'harkirat-singh',
-  name: 'Harkirat Singh',
-  bio: "As a risk-averse trader, I base my trading decisions on chart analysis and follow Glenn Neely's approach to Elliott Wave Theory, only BTC, DOGE on low leverage - like spot",
-  platform: 'Polymarket',
-  copiers: 317,
-  daysJoined: 185,
-  stats: {
-    roi30D: '+20.95%',
-    cumulativePnL: '+52,944.59',
-    accountAssets: '248,236.83',
-    maxDrawdown: 'Cumulative PnL',
-    risk: '24.81%',
-    cumulativeEarningsOfCopiers: '-2,718.38',
-    cumulativeCopiers: '2,410',
-    profitShare: '16%',
-    winRatio: '76.00%',
-    currencyUnit: 'USDT'
-  }
+// Helper function to format numbers
+const formatNumber = (num: number): string => {
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(num);
+};
+
+// Helper function to format percentage
+const formatPct = (num: number): string => {
+  const sign = num >= 0 ? '+' : '';
+  return `${sign}${num.toFixed(2)}%`;
 };
 
 export function useTraderData(traderId: string) {
-  const [data, setData] = useState<TraderData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+  const { data: leaderData, isLoading, error } = useLeaderDetail(traderId);
 
-  useEffect(() => {
-    // Simulate API call
-    const fetchTraderData = async () => {
-      try {
-        setLoading(true);
-        // In a real app, you would fetch from your API:
-        // const response = await fetch(`/api/traders/${traderId}`);
-        // const data = await response.json();
-        
-        // Simulate network delay
-        await new Promise(resolve => setTimeout(resolve, 300));
-        
-        setData(mockTraderData);
-      } catch (err) {
-        setError(err instanceof Error ? err : new Error('Failed to fetch trader data'));
-      } finally {
-        setLoading(false);
-      }
-    };
+  // Transform API data to TraderData format
+  const data: TraderData | null = leaderData ? {
+    id: leaderData.leader_id,
+    name: leaderData.name,
+    bio: leaderData.bio || "No bio available",
+    platform: leaderData.platform,
+    copiers: leaderData.followers_count,
+    daysJoined: 185, // TODO: Calculate from created_at when available
+    stats: {
+      roi30D: formatPct(leaderData.stats.pnl_30d),
+      cumulativePnL: formatNumber(leaderData.stats.pnl_all_time),
+      accountAssets: formatNumber(leaderData.stats.pnl_all_time), // TODO: Add actual account assets
+      maxDrawdown: 'Cumulative PnL',
+      risk: '24.81%', // TODO: Add risk calculation
+      cumulativeEarningsOfCopiers: formatNumber(0), // TODO: Add from backend
+      cumulativeCopiers: leaderData.followers_count.toString(),
+      profitShare: '16%', // TODO: Add from backend
+      winRatio: formatPct(leaderData.stats.win_rate * 100),
+      currencyUnit: 'USDT'
+    }
+  } : null;
 
-    fetchTraderData();
-  }, [traderId]);
-
-  return { data, loading, error };
+  return {
+    data,
+    loading: isLoading,
+    error: error as Error | null,
+  };
 }
 

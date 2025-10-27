@@ -20,6 +20,11 @@ pub struct AppConfig {
     // Retry configuration
     pub max_retry_attempts: Option<u32>,
     pub retry_delay_seconds: Option<u64>,
+    
+    // Wallet tracking configuration
+    pub enable_wallet_tracking: Option<bool>,
+    pub wallet_tracking_interval_seconds: Option<u64>,
+    pub wallet_stats_update_interval_seconds: Option<u64>,
 }
 
 impl AppConfig {
@@ -32,6 +37,9 @@ impl AppConfig {
             .set_default("request_timeout_seconds", 30)?
             .set_default("max_retry_attempts", 3)?
             .set_default("retry_delay_seconds", 5)?
+            .set_default("enable_wallet_tracking", false)?
+            .set_default("wallet_tracking_interval_seconds", 60)?
+            .set_default("wallet_stats_update_interval_seconds", 300)?
             .build()
             .context("building config from environment")?;
 
