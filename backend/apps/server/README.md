@@ -32,6 +32,12 @@ A comprehensive REST API server for OctaMarkets prediction market aggregator pla
 - `GET /api/markets/categories` - Get market categories
 - `GET /api/markets/tags` - Get market tags
 
+### Trades
+- `POST /api/trades` - Create/enqueue a trade intent (protected; marketId required)
+- `GET /api/trades/:intentId/status` - Get trade intent status (protected)
+- `GET /api/trades/:intentId/stream` - Stream trade intent updates via SSE (protected)
+- `GET /api/trades/recent/list` - List recent intents for current user (protected)
+
 ### Leaderboard
 - `GET /api/leaderboard` - Get global leaderboard (aggregated)
 - `GET /api/leaderboard/:source` - Get source-specific leaderboard
@@ -132,6 +138,7 @@ The API implements Redis caching with different TTLs:
 PORT=3001
 HOST=localhost
 NODE_ENV=development
+SERVER_INTERNAL_TOKEN=optional-shared-secret-for-internal-endpoints
 
 # Database
 DATABASE_URL=postgresql://postgres:password@localhost:5432/octamarkets
@@ -154,6 +161,27 @@ CORS_ORIGIN=http://localhost:3000,http://localhost:3001
 LOG_LEVEL=info
 LOG_FILE=
 ```
+
+## Internal Endpoints
+
+### Trade State Reporting (used by Execution Engine)
+
+- `POST /internal/trades/:intentId/state`
+  - Auth: If `SERVER_INTERNAL_TOKEN` is set, include `Authorization: Bearer <token>`
+  - Body:
+  ```json
+  {
+    "state": "SUBMITTED|FILLED|FAILED",
+    "venue": "KALSHI|POLYMARKET",
+    "orderId": "string",
+    "avgPrice": 0.65,
+    "price": 0.65,
+    "fills": [{ "qty": 10, "px": 0.65, "ts": "ISO" }],
+    "reason": "optional",
+    "error": "optional"
+  }
+  ```
+  - Behavior: Logs the report (extend to persist as needed)
 
 ## Development
 

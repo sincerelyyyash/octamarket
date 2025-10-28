@@ -14,6 +14,7 @@ A comprehensive REST API server for OctaMarkets prediction market aggregator pla
   - [Health Check](#health-check)
   - [Authentication](#authentication-endpoints)
   - [Markets](#markets-endpoints)
+  - [Trades](#trades-endpoints)
   - [Traders](#traders-endpoints)
   - [Leaderboard](#leaderboard-endpoints)
   - [Statistics](#statistics-endpoints)
@@ -29,6 +30,34 @@ The OctaMarkets API provides access to prediction market data from multiple sour
 
 ```
 http://localhost:3001
+```
+
+## Local Development & Running
+
+To bring up all backend services (API server, indexer, execution engine, signer) locally:
+
+1) Start infrastructure
+```
+docker compose up -d
+```
+
+2) Start all services from backend root
+```
+bun run dev
+```
+
+Notes:
+- The signer service runs on `http://localhost:8081`. In development, if `SIGNER_TOKEN` is not set in `apps/signer-service/.env`, authentication is bypassed so other services can call it.
+- Defaults used:
+  - Postgres: `postgresql://postgres:password@localhost:5432/octamarkets`
+  - Redis: `localhost:6379`
+  - API: `http://localhost:3001`
+  - Signer: `http://localhost:8081`
+
+Optional security in dev:
+- Keep `SIGNER_TOKEN` set in `apps/signer-service/.env` and export the same in your shell so the engine can authenticate:
+```
+export SIGNER_TOKEN=change-me
 ```
 
 ## Authentication
@@ -116,6 +145,50 @@ Rate limit headers are included in responses:
 - `X-RateLimit-Reset`: Time when the rate limit resets
 
 ## Endpoints
+### Internal
+
+#### POST /internal/trades/:intentId/state
+
+Receive execution engine state updates.
+
+Headers (if configured):
+```
+Authorization: Bearer <SERVER_INTERNAL_TOKEN>
+```
+
+Request Body:
+```json
+{
+  "state": "SUBMITTED|FILLED|FAILED",
+  "venue": "KALSHI|POLYMARKET",
+  "orderId": "ord_abc123",
+  "avgPrice": 0.65,
+  "fills": [ { "qty": 10, "px": 0.65, "ts": "2025-10-28T10:05:00Z" } ],
+  "reason": "optional",
+  "error": "optional",
+  "price": 0.65
+}
+```
+
+Response:
+```json
+{ "success": true, "data": { "intentId": "<id>", "state": "FILLED" } }
+```
+
+### Signer Service (local-only reference)
+
+While not exposed by the API server, the execution engine depends on a local signer service:
+
+- Health: `GET http://localhost:8081/health`
+- Polymarket credentials: `GET http://localhost:8081/credentials/polymarket`
+- Kalshi credentials: `GET http://localhost:8081/credentials/kalshi`
+
+Development auth model:
+- If `SIGNER_TOKEN` is unset in `apps/signer-service/.env`, requests are allowed (dev bypass).
+- If `SIGNER_TOKEN` is set, calls must include:
+```
+Authorization: Bearer <SIGNER_TOKEN>
+```
 
 ### Health Check
 
@@ -313,6 +386,94 @@ Get list of markets with filtering and pagination.
 
 **Example Request:**
 ```
+
+### Trades Endpoints
+
+#### POST /api/trades
+
+Create and enqueue a trade intent for execution. Returns 202 Accepted on success. **Requires Authentication**
+
+**Headers:**
+```
+Authorization: Bearer <token>
+Idempotency-Key: <unique-key>   # optional but recommended; defaults to intentId if omitted
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "intentId": "unique-intent-id-123",
+  "source": "POLYMARKET",
+  "sourceMarketId": "0x36db...3701",
+  "marketId": "cmh9acpcs02qrou66ya4n0okx",
+  "side": "BUY",
+  "outcomeIndex": 0,
+  "quantity": 100,
+  "limitPrice": 0.65,
+  "followerContext": {
+    "originalTradeId": "optional-id",
+    "followingId": "optional-trader-id"
+  }
+}
+```
+
+Notes:
+- `marketId` is REQUIRED (the engine resolves source mappings from this).
+- For Polymarket execution the engine uses `tokenId` when available. If only `condition_id` is present in the DB, the engine resolves `tokenId` via the CLOB `/markets` endpoint.
+- `limitPrice` is optional (0-1). If provided, funds are reserved accordingly for BUY orders.
+- `outcomeIndex` is optional for binary markets; set for multi-outcome markets.
+
+**Responses:**
+- 202 Accepted
+```json
+{ "success": true, "data": { "intentId": "unique-intent-id-123", "enqueuedId": "<redis-stream-id>" } }
+```
+- 401 Unauthorized, 402 Insufficient Funds, 409 Duplicate (idempotency), 422 Validation Error
+
+#### GET /api/trades/:intentId/status
+
+Get the current status of a trade intent. **Requires Authentication**
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "intentId": "unique-intent-id-123",
+    "status": "SUBMITTED|FILLED|FAILED",
+    "venue": "KALSHI|POLYMARKET|null",
+    "orderId": "ord_abc123",
+    "avgPrice": 0.65,
+    "fills": [ { "qty": 10, "px": 0.65, "ts": "2025-10-28T10:05:00Z" } ],
+    "reason": null,
+    "error": null,
+    "submittedAt": "2025-10-28T10:00:00Z",
+    "filledAt": null,
+    "failedAt": null
+  }
+}
+```
+
+#### GET /api/trades/:intentId/stream
+
+Server-Sent Events stream for real-time updates of a trade intent. **Requires Authentication**
+
+Events:
+- `snapshot`: initial payload (current DB state)
+- `update`: subsequent state changes from the execution engine
+
+Implementation notes:
+- The stream uses Redis pub/sub channel `trades.intent.<intentId>` under the hood.
+- Keep the HTTP connection open; the server will send SSE `event: update` frames for changes.
+
+#### GET /api/trades/recent/list
+
+List recent trade intents for the authenticated user. **Requires Authentication**
+
+**Query Parameters:**
+- `limit` (number): Defaults to 20, max 50
+
 GET /api/markets?page=1&limit=5&source=POLYMARKET&status=ACTIVE
 ```
 
@@ -411,6 +572,7 @@ Get specific market by ID.
         "id": "cmh9acpe202wfou66sj8a1b16",
         "source": "POLYMARKET",
         "sourceMarketId": "0x123...",
+        "tokenId": "73470541315377973562501025254719659796416871135081220986683321361000395461644",
         "isActive": true
       }
     ]
