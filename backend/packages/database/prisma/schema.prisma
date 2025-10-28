@@ -50,6 +50,32 @@ enum TradeStatus {
   FAILED
 }
 
+// Status for trade intents flowing through the execution engine
+enum TradeIntentStatus {
+  SUBMITTED
+  FILLED
+  FAILED
+}
+
+// Ledger and custody enums
+enum AssetSymbol {
+  USDC
+}
+
+enum LedgerEntryType {
+  DEPOSIT
+  WITHDRAWAL
+  RESERVATION
+  RELEASE
+  TRADE_SETTLEMENT
+  FEE
+}
+
+enum TransferDirection {
+  IN
+  OUT
+}
+
 // Core models
 model User {
   id            String    @id @default(cuid())
@@ -101,7 +127,8 @@ model SourceMarket {
   id              String        @id @default(cuid())
   marketId        String
   source          MarketSource
-  sourceMarketId  String        // ID from the source platform
+  sourceMarketId  String        // ID from the source platform (condition_id for Polymarket)
+  tokenId         String?       // Token ID for trading (token_id for Polymarket CLOB)
   sourceData      Json          // Raw data from source
   isActive        Boolean       @default(true)
   createdAt       DateTime      @default(now())
@@ -369,4 +396,96 @@ model IndexerState {
   updatedAt     DateTime @updatedAt
   
   @@index([source])
+}
+
+// Trade intent ingress and lifecycle state
+model TradeIntent {
+  id              String             @id @default(cuid())
+  intentId        String             @unique
+  
+  // Actor context
+  userId          String?
+  traderId        String?
+  followingId     String?
+
+  // Market context
+  source          MarketSource
+  marketId        String?
+  sourceMarketId  String
+
+  // Order details
+  side            TradeSide
+  outcomeIndex    Int?
+  quantity        Decimal            @db.Decimal(20, 8)
+  limitPrice      Decimal?           @db.Decimal(10, 8)
+
+  // Engine lifecycle
+  status          TradeIntentStatus
+  venue           String?
+  orderId         String?
+  avgPrice        Decimal?           @db.Decimal(10, 8)
+  fills           Json?
+  reason          String?
+  error           String?
+
+  submittedAt     DateTime?
+  filledAt        DateTime?
+  failedAt        DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([status])
+  @@index([sourceMarketId])
+}
+
+// Solana wallet linking
+model Wallet {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  solanaAddress String   @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// Per-user per-asset account snapshot for quick reads
+model Account {
+  id            String      @id @default(cuid())
+  userId        String
+  asset         AssetSymbol
+  available     Decimal     @default(0) @db.Decimal(20, 8)
+  reserved      Decimal     @default(0) @db.Decimal(20, 8)
+  updatedAt     DateTime    @updatedAt
+  createdAt     DateTime    @default(now())
+
+  @@unique([userId, asset])
+  @@index([asset])
+}
+
+// Immutable ledger of all balance movements
+model LedgerEntry {
+  id            String          @id @default(cuid())
+  userId        String
+  asset         AssetSymbol
+  amount        Decimal         @db.Decimal(20, 8)
+  entryType     LedgerEntryType
+  referenceId   String?
+  metadata      Json?
+  createdAt     DateTime        @default(now())
+
+  @@index([userId, asset, createdAt])
+}
+
+// External transfers (on-chain)
+model Transfer {
+  id            String            @id @default(cuid())
+  userId        String
+  asset         AssetSymbol
+  direction     TransferDirection
+  amount        Decimal           @db.Decimal(20, 8)
+  txSignature   String?           @unique
+  status        String            @default("PENDING")
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([userId, asset, direction, status])
 }
