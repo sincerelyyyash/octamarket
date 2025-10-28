@@ -4,9 +4,9 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun run --watch index.ts",
+    "dev": "bun run index.ts",
     "start": "bun run index.ts",
-    "build": "bun build index.ts --outdir dist --target node",
+    "build": "echo 'noop'",
     "type-check": "tsc --noEmit"
   },
   "devDependencies": {
