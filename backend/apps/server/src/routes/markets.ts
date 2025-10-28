@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import {
   getMarkets,
   getMarketById,
@@ -16,7 +16,7 @@ import {
 import { cacheMiddleware } from '../middleware/cache.js';
 import { config } from '../config/index.js';
 
-const router = Router();
+const router: Router = Router();
 
 // Cache middleware with different TTLs
 const marketCache = cacheMiddleware({ ttl: config.cache.ttl.markets });

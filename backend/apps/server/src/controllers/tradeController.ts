@@ -99,7 +99,7 @@ export const createTrade = async (req: Request, res: Response, next: NextFunctio
 
     const idempotencyKey = req.header('Idempotency-Key') || intentId;
     const idempKey = `trade:intent:idemp:${idempotencyKey}`;
-    const ok = await redis.getClient().set(idempKey, '1', 'NX', 'EX', 60);
+    const ok = await redis.getClient().set(idempKey, '1', 'EX', 60, 'NX');
     if (!ok) {
       res.status(409).json({ success: false, error: { message: 'Duplicate trade intent', code: 'DUPLICATE' } });
       return;

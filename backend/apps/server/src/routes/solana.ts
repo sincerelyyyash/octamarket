@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticateToken } from '../middleware/auth.js';
 import { linkWallet, getBalances, depositWebhook, jupiterQuote, jupiterBuildTx } from '../controllers/solanaController.js';
 
-const router = Router();
+const router: Router = Router();
 
 router.post('/link', authenticateToken, linkWallet);
 router.get('/balances', authenticateToken, getBalances);

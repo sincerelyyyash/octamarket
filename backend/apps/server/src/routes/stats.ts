@@ -11,7 +11,7 @@ import {
 import { cacheMiddleware } from '../middleware/cache.js';
 import { config } from '../config/index.js';
 
-const router = Router();
+const router: Router = Router();
 
 // Cache middleware with longer TTL for stats
 const statsCache = cacheMiddleware({ ttl: config.cache.ttl.stats });

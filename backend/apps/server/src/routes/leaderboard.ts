@@ -12,7 +12,7 @@ import {
 import { cacheMiddleware } from '../middleware/cache.js';
 import { config } from '../config/index.js';
 
-const router = Router();
+const router: Router = Router();
 
 // Cache middleware with different TTLs
 const leaderboardCache = cacheMiddleware({ ttl: config.cache.ttl.leaderboards });
