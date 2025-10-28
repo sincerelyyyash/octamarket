@@ -184,6 +184,7 @@ const formatMarketResponse = (market: any) => ({
     id: sourceMarket.id,
     source: sourceMarket.source,
     sourceMarketId: sourceMarket.sourceMarketId,
+    tokenId: sourceMarket.tokenId || undefined, // Include tokenId for Polymarket
     isActive: sourceMarket.isActive,
   })) || [],
 });

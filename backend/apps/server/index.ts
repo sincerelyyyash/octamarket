@@ -17,8 +17,11 @@ import authRoutes from './src/routes/auth.js';
 import marketRoutes from './src/routes/markets.js';
 import leaderboardRoutes from './src/routes/leaderboard.js';
 import traderRoutes from './src/routes/traders.js';
+import tradesRoutes from './src/routes/trades.js';
 import copyTradingRoutes from './src/routes/copy-trading.js';
 import statsRoutes from './src/routes/stats.js';
+import solanaRoutes from './src/routes/solana.js';
+import internalRoutes from './src/routes/internal.js';
 
 class Server {
   private app: express.Application;
@@ -91,8 +94,11 @@ class Server {
     this.app.use('/api/markets', marketRoutes);
     this.app.use('/api/leaderboard', leaderboardRoutes);
     this.app.use('/api/traders', traderRoutes);
+    this.app.use('/api/trades', tradesRoutes);
     this.app.use('/api/copy-trading', copyTradingRoutes);
     this.app.use('/api/stats', statsRoutes);
+    this.app.use('/api/solana', solanaRoutes);
+    this.app.use('/internal', internalRoutes);
 
     // Root endpoint
     this.app.get('/', (req, res) => {
@@ -233,5 +239,3 @@ server.start().catch((error) => {
   });
   process.exit(1);
 });
-
-export default server;

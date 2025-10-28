@@ -7,6 +7,7 @@ export const config = {
     port: parseInt(process.env.PORT || '3001'),
     environment: process.env.NODE_ENV || 'development',
     host: process.env.HOST || 'localhost',
+    internalToken: process.env.SERVER_INTERNAL_TOKEN,
   },
   database: {
     url: process.env.DATABASE_URL || 'postgresql://postgres:password@localhost:5432/octamarkets',
@@ -51,6 +52,12 @@ export const config = {
   logging: {
     level: process.env.LOG_LEVEL || 'info',
     file: process.env.LOG_FILE,
+  },
+  solana: {
+    rpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+    usdcMint: process.env.SOLANA_USDC_MINT || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    treasuryAddress: process.env.SOLANA_TREASURY_ADDRESS || '',
+    webhookSecret: process.env.SOLANA_WEBHOOK_SECRET || '',
   },
 } as const;
 
