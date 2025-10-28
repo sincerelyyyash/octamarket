@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { MarketSource, EventType } from '@repo/database';
+import { MarketSource, EventType, prisma } from '@repo/database';
 import { TradeStatus } from '../types/index.js';
 import type { DataSource, MarketEventData, PriceData, LeaderboardDataSource, TradeData } from '../types/index.js';
 import { IndexerError } from '../types/index.js';
@@ -730,6 +730,15 @@ export class IndexerService {
 
   private async handleCopyTrading(originalTrade: TradeData): Promise<void> {
     try {
+      // Only support KALSHI and POLYMARKET for copy-trading intents
+      if (!(originalTrade.source === 'KALSHI' || originalTrade.source === 'POLYMARKET')) {
+        this.logger.debug('Skipping copy trading for unsupported source', {
+          source: originalTrade.source,
+          tradeId: originalTrade.sourceTradeId,
+        });
+        return;
+      }
+
       // Get followers of the trader
       const followers = await this.dbManager.getTraderFollowers(originalTrade.traderId);
       
@@ -780,7 +789,7 @@ export class IndexerService {
             },
           };
 
-          // Normalize and queue copy trade
+          // Normalize and queue copy trade (DB persistence)
           const normalized = await this.leaderboardNormalizer.normalizeTrade(
             copyTrade.sourceData || copyTrade,
             copyTrade.source,
@@ -789,6 +798,66 @@ export class IndexerService {
           );
 
           this.queueManager.enqueueTradeData(normalized.tradeData);
+
+          // Also publish trade intent to execution engine with idempotency
+          try {
+            const { tradeIntents } = await import('../utils/redis.js');
+            const idKey = `${originalTrade.sourceTradeId}:${follow.followerId}`;
+            const ok = await tradeIntents.idempotent(idKey, 300);
+            if (ok) {
+              const intentId = `${follow.followerId}_${Date.now()}_${originalTrade.sourceTradeId}`;
+              // Ensure marketId is present: resolve via source/sourceMarketId if missing
+              let resolvedMarketId = originalTrade.marketId;
+              if (!resolvedMarketId) {
+                try {
+                  const sourceMarket = await (prisma as any).sourceMarket.findFirst({
+                    where: {
+                      source: originalTrade.source,
+                      sourceMarketId: originalTrade.sourceMarketId,
+                    },
+                  });
+                  resolvedMarketId = sourceMarket?.marketId || undefined;
+                } catch (resolveErr) {
+                  this.logger.warn('Failed to resolve marketId for copy-trade intent', {
+                    source: originalTrade.source,
+                    sourceMarketId: originalTrade.sourceMarketId,
+                    error: resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
+                  });
+                }
+              }
+
+              if (!resolvedMarketId) {
+                this.logger.warn('Skipping copy trade intent enqueue due to missing marketId', {
+                  followerId: follow.followerId,
+                  originalTradeId: originalTrade.sourceTradeId,
+                });
+              } else {
+              await tradeIntents.enqueue({
+                intentId,
+                idempotencyKey: intentId,
+                userId: follow.followerId,
+                  marketId: resolvedMarketId,
+                followerId: follow.followerId,
+                followingId: follow.followingId,
+                source: originalTrade.source,
+                sourceMarketId: originalTrade.sourceMarketId,
+                side: originalTrade.side,
+                outcomeIndex: originalTrade.outcomeIndex ?? undefined,
+                quantity: copyTrade.quantity,
+                limitPrice: copyTrade.price,
+                copied: 1,
+                originalTradeId: originalTrade.sourceTradeId,
+              });
+              this.logger.info('Published copy trade intent', { intentId, followerId: follow.followerId });
+              }
+            }
+          } catch (err) {
+            this.logger.error('Failed to publish copy trade intent', {
+              followerId: follow.followerId,
+              originalTradeId: originalTrade.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
 
           this.logger.info('Created copy trade', {
             followerId: follow.followerId,

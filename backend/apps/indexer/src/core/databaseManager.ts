@@ -52,6 +52,7 @@ export class DatabaseManager {
         await prisma.sourceMarket.update({
           where: { id: existingSourceMarket.id },
           data: {
+            tokenId: marketData.token_id || null, // Update token_id for Polymarket
             sourceData: marketData as any,
             updatedAt: new Date(),
           },
@@ -93,6 +94,7 @@ export class DatabaseManager {
               marketId,
               source,
               sourceMarketId,
+              tokenId: marketData.token_id || null, // Store token_id for Polymarket
               sourceData: marketData as any,
             },
           });
@@ -107,6 +109,7 @@ export class DatabaseManager {
             },
             data: {
               marketId,
+              tokenId: marketData.token_id || null, // Update token_id for Polymarket
               sourceData: marketData as any,
               updatedAt: new Date(),
             },

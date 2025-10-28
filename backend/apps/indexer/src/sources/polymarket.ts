@@ -108,6 +108,28 @@ export class PolymarketSource implements DataSource {
                 event_slug: eventData.slug,
               };
               
+              // Fetch token information from CLOB API
+              try {
+                const clobResponse = await axios.get('https://clob.polymarket.com/markets', {
+                  params: { condition_id: marketData.condition_id },
+                  timeout: 10000,
+                });
+                
+                if (clobResponse.data?.data && clobResponse.data.data.length > 0) {
+                  const clobMarket = clobResponse.data.data[0];
+                  if (clobMarket.tokens && clobMarket.tokens.length > 0) {
+                    // Add token information to market data
+                    enrichedMarketData.tokens = clobMarket.tokens;
+                    enrichedMarketData.token_id = clobMarket.tokens[0].token_id; // Store first token_id
+                  }
+                }
+              } catch (clobError) {
+                this.logger.debug('Failed to fetch CLOB token data', {
+                  conditionId: marketData.condition_id,
+                  error: clobError instanceof Error ? clobError.message : String(clobError),
+                });
+              }
+              
               const normalized = await this.normalizer.normalizeMarket(
                 enrichedMarketData,
                 this.name,
