@@ -1,0 +1,26 @@
+{
+  "name": "@opinion-markets/solana-program",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "cd octamarket && anchor build",
+    "test": "cd octamarket && anchor test",
+    "deploy:devnet": "cd octamarket && anchor deploy --provider.cluster devnet",
+    "deploy:mainnet": "cd octamarket && anchor deploy --provider.cluster mainnet"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/web3.js": "^1.95.8",
+    "@solana/spl-token": "^0.4.9"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
+  },
+  "description": "This package contains the Anchor program for on-chain trade intents, escrow, and copy-trading for Octamarket.",
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

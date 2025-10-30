@@ -1,0 +1,6 @@
+[build]
+target = "sbpf-solana-solana"
+
+[target.sbpf-solana-solana]
+linker = "ld.lld"
+
