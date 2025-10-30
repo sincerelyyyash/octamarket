@@ -67,7 +67,7 @@ npm run deploy:mainnet
 The TypeScript client is exported from `src/client.ts`:
 
 ```typescript
-import { OctamarketClient, PROGRAM_ID } from '@opinion-markets/solana-program';
+import { OctamarketClient, PROGRAM_ID } from '@repo/solana-program';
 import { Connection, Keypair } from '@solana/web3.js';
 
 const connection = new Connection('https://api.devnet.solana.com');

@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@prisma/client": "latest",
-    "@opinion-markets/solana-program": "*",
+    "@repo/solana-program": "*",
     "@solana/web3.js": "^1.95.8",
     "@coral-xyz/anchor": "^0.30.1",
     "axios": "^1.7.7",

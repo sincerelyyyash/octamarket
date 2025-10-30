@@ -1,5 +1,5 @@
 {
-  "name": "@opinion-markets/solana-program",
+  "name": "@repo/solana-program",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "deploy:mainnet": "cd octamarket && anchor deploy --provider.cluster mainnet"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.32.1",
+    "@coral-xyz/anchor": "^0.31.1",
     "@solana/web3.js": "^1.95.8",
     "@solana/spl-token": "^0.4.9"
   },
