@@ -1,0 +1,5 @@
+// Placeholder SVG for logo
+<svg width="39" height="36" viewBox="0 0 39 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="39" height="36" rx="8" fill="#4F46E5"/>
+  <text x="19.5" y="22" text-anchor="middle" fill="white" font-family="Arial" font-size="16" font-weight="bold">O</text>
+</svg>
