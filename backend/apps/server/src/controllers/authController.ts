@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { authService } from '../services/authService.js';
-import { logger } from '../utils/logger.js';
+import { authService } from '../services/authService';
+import { logger } from '../utils/logger';
 import { z } from 'zod';
 
 // Types
