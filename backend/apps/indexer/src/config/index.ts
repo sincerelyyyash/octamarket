@@ -21,6 +21,13 @@ export const config: IndexerConfig = {
       pollInterval: 60000, // 1 minute
       enabled: true, // Market data is public, trading requires API key
     },
+    {
+      source: 'SOLANA' as any,
+      enabled: process.env.SOLANA_INDEXER_ENABLED === 'true',
+      rpcUrl: process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
+      wsUrl: process.env.SOLANA_WS_URL || 'wss://api.devnet.solana.com',
+      programId: process.env.SOLANA_PROGRAM_ID || 'DSzcxNHsezokjETdk9ymJYvR27bGS876g2EqoVxQraQE',
+    } as any,
     // Disabled sources - not currently working
     // {
     //   source: MarketSource.AUGUR,
