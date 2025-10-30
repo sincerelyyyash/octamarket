@@ -4,6 +4,7 @@ export const intentSchema = z.object({
   intentId: z.string().min(1),
   userId: z.string().min(1),
   marketId: z.string().min(1),
+  userWallet: z.string().optional(), // Solana wallet address for on-chain settlement
   sourceAllowlist: z.array(z.enum(['POLYMARKET', 'KALSHI'])).optional(),
   side: z.enum(['BUY', 'SELL']),
   quantity: z.number().positive(),
