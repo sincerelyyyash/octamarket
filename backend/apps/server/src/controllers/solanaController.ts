@@ -2,6 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma, Prisma } from '@repo/database';
 import { config } from '../config/index';
+import { Connection, PublicKey, Transaction } from '@solana/web3.js';
+import { OctamarketClient, encodeIntentId, encodeMarketId } from '@repo/solana-program';
+import type { SIWSRequest } from '../middleware/siws.js';
 
 const linkRequestSchema = z.object({
   address: z.string().min(32),
@@ -139,4 +142,373 @@ export const jupiterBuildTx = async (req: Request, res: Response, next: NextFunc
   }
 };
 
+// ===== On-Chain Program Transaction Builders =====
 
+// Helper to get Solana client
+const getSolanaClient = (): OctamarketClient => {
+  const connection = new Connection(config.solana.rpcUrl, 'confirmed');
+  // Dummy wallet for read-only operations
+  const wallet = {
+    publicKey: PublicKey.default,
+    signTransaction: async (tx: Transaction) => tx,
+    signAllTransactions: async (txs: Transaction[]) => txs,
+  };
+  return OctamarketClient.create(connection, wallet);
+};
+
+const initUserSchema = z.object({
+  kycHash: z.string().optional(),
+});
+
+export const buildInitUser = async (req: SIWSRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    if (!req.solanaWallet) {
+      res.status(401).json({ success: false, error: { message: 'Solana wallet not authenticated', code: 'UNAUTHORIZED' } });
+      return;
+    }
+
+    const parsed = initUserSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(422).json({ success: false, error: { message: 'Validation failed', code: 'VALIDATION_ERROR' } });
+      return;
+    }
+
+    const { kycHash } = parsed.data;
+    const client = getSolanaClient();
+    const owner = req.solanaWallet.publicKey;
+    
+    const kycHashBytes = kycHash ? Buffer.from(kycHash, 'hex') : undefined;
+    const tx = await client.initUser(owner, kycHashBytes);
+    
+    const { blockhash, lastValidBlockHeight } = await client.provider.connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.lastValidBlockHeight = lastValidBlockHeight;
+    tx.feePayer = owner;
+
+    const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+    const base64 = serialized.toString('base64');
+
+    res.status(200).json({
+      success: true,
+      data: {
+        unsignedTxBase64: base64,
+        userPda: client.getUserPDA(owner)[0].toBase58(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const openIntentSchema = z.object({
+  intentId: z.string().uuid(),
+  marketId: z.string().min(1),
+  side: z.enum(['BUY', 'SELL']),
+  quantity: z.number().positive(),
+  maxPrice: z.number().positive().max(1),
+  expiry: z.number().int().positive(),
+});
+
+export const buildOpenIntent = async (req: SIWSRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    if (!req.solanaWallet) {
+      res.status(401).json({ success: false, error: { message: 'Solana wallet not authenticated', code: 'UNAUTHORIZED' } });
+      return;
+    }
+
+    const parsed = openIntentSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(422).json({
+        success: false,
+        error: {
+          message: 'Validation failed',
+          code: 'VALIDATION_ERROR',
+          details: parsed.error.errors.map(err => ({ field: err.path.join('.'), message: err.message })),
+        },
+      });
+      return;
+    }
+
+    const { intentId, marketId, side, quantity, maxPrice, expiry } = parsed.data;
+    const client = getSolanaClient();
+    const owner = req.solanaWallet.publicKey;
+    const usdcMint = new PublicKey(config.solana.usdcMint);
+
+    const intentIdBuf = encodeIntentId(intentId);
+    const marketIdBuf = encodeMarketId(marketId);
+    const sideEnum = side === 'BUY' ? { buy: {} } : { sell: {} };
+    
+    // Scale price by 1e6; quantity is in contracts (unscaled)
+    const quantityContracts = Math.floor(quantity);
+    const maxPriceLamports = Math.floor(maxPrice * 1_000_000);
+
+    const tx = await client.openIntent(
+      owner,
+      intentIdBuf,
+      marketIdBuf,
+      sideEnum,
+      quantityContracts,
+      maxPriceLamports,
+      expiry,
+      usdcMint
+    );
+
+    const { blockhash, lastValidBlockHeight } = await client.provider.connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.lastValidBlockHeight = lastValidBlockHeight;
+    tx.feePayer = owner;
+
+    const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+    const base64 = serialized.toString('base64');
+
+    const [userPda] = client.getUserPDA(owner);
+    const [intentPda] = client.getIntentPDA(userPda, intentIdBuf);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        unsignedTxBase64: base64,
+        intentId,
+        intentPda: intentPda.toBase58(),
+        userPda: userPda.toBase58(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const cancelIntentSchema = z.object({
+  intentId: z.string().uuid(),
+});
+
+export const buildCancelIntent = async (req: SIWSRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    if (!req.solanaWallet) {
+      res.status(401).json({ success: false, error: { message: 'Solana wallet not authenticated', code: 'UNAUTHORIZED' } });
+      return;
+    }
+
+    const parsed = cancelIntentSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(422).json({ success: false, error: { message: 'Validation failed', code: 'VALIDATION_ERROR' } });
+      return;
+    }
+
+    const { intentId } = parsed.data;
+    const client = getSolanaClient();
+    const owner = req.solanaWallet.publicKey;
+    const usdcMint = new PublicKey(config.solana.usdcMint);
+
+    const intentIdBuf = encodeIntentId(intentId);
+    const tx = await client.cancelIntent(owner, intentIdBuf, usdcMint);
+
+    const { blockhash, lastValidBlockHeight } = await client.provider.connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.lastValidBlockHeight = lastValidBlockHeight;
+    tx.feePayer = owner;
+
+    const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+    const base64 = serialized.toString('base64');
+
+    res.status(200).json({
+      success: true,
+      data: {
+        unsignedTxBase64: base64,
+        intentId,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const setCopyPolicySchema = z.object({
+  copyPercentage: z.number().int().min(0).max(100),
+  maxCopyAmount: z.number().positive(),
+  maxDailyAmount: z.number().positive(),
+  expiry: z.number().int().positive(),
+});
+
+export const buildSetCopyPolicy = async (req: SIWSRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    if (!req.solanaWallet) {
+      res.status(401).json({ success: false, error: { message: 'Solana wallet not authenticated', code: 'UNAUTHORIZED' } });
+      return;
+    }
+
+    const parsed = setCopyPolicySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(422).json({
+        success: false,
+        error: {
+          message: 'Validation failed',
+          code: 'VALIDATION_ERROR',
+          details: parsed.error.errors.map(err => ({ field: err.path.join('.'), message: err.message })),
+        },
+      });
+      return;
+    }
+
+    const { copyPercentage, maxCopyAmount, maxDailyAmount, expiry } = parsed.data;
+    const client = getSolanaClient();
+    const owner = req.solanaWallet.publicKey;
+
+    // Convert to lamports
+    const maxCopyAmountLamports = Math.floor(maxCopyAmount * 1_000_000);
+    const maxDailyAmountLamports = Math.floor(maxDailyAmount * 1_000_000);
+
+    const tx = await client.setCopyPolicy(
+      owner,
+      copyPercentage,
+      maxCopyAmountLamports,
+      maxDailyAmountLamports,
+      expiry
+    );
+
+    const { blockhash, lastValidBlockHeight } = await client.provider.connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.lastValidBlockHeight = lastValidBlockHeight;
+    tx.feePayer = owner;
+
+    const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+    const base64 = serialized.toString('base64');
+
+    const [copyPolicyPda] = client.getCopyPolicyPDA(owner);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        unsignedTxBase64: base64,
+        copyPolicyPda: copyPolicyPda.toBase58(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const fundEscrowSchema = z.object({
+  amount: z.number().positive(),
+});
+
+export const buildFundEscrow = async (req: SIWSRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    if (!req.solanaWallet) {
+      res.status(401).json({ success: false, error: { message: 'Solana wallet not authenticated', code: 'UNAUTHORIZED' } });
+      return;
+    }
+
+    const parsed = fundEscrowSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(422).json({ success: false, error: { message: 'Validation failed', code: 'VALIDATION_ERROR' } });
+      return;
+    }
+
+    const { amount } = parsed.data;
+    const client = getSolanaClient();
+    const owner = req.solanaWallet.publicKey;
+    const usdcMint = new PublicKey(config.solana.usdcMint);
+
+    // Convert to lamports
+    const amountLamports = Math.floor(amount * 1_000_000);
+
+    const tx = await client.fundEscrow(owner, amountLamports, usdcMint);
+
+    const { blockhash, lastValidBlockHeight } = await client.provider.connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.lastValidBlockHeight = lastValidBlockHeight;
+    tx.feePayer = owner;
+
+    const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+    const base64 = serialized.toString('base64');
+
+    const [userPda] = client.getUserPDA(owner);
+    const [vaultPda] = client.getVaultPDA(userPda);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        unsignedTxBase64: base64,
+        vaultPda: vaultPda.toBase58(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const withdrawEscrowSchema = z.object({
+  amount: z.number().positive(),
+});
+
+export const buildWithdrawEscrow = async (req: SIWSRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    if (!req.solanaWallet) {
+      res.status(401).json({ success: false, error: { message: 'Solana wallet not authenticated', code: 'UNAUTHORIZED' } });
+      return;
+    }
+
+    const parsed = withdrawEscrowSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(422).json({ success: false, error: { message: 'Validation failed', code: 'VALIDATION_ERROR' } });
+      return;
+    }
+
+    const { amount } = parsed.data;
+    const client = getSolanaClient();
+    const owner = req.solanaWallet.publicKey;
+    const usdcMint = new PublicKey(config.solana.usdcMint);
+
+    // Convert to lamports
+    const amountLamports = Math.floor(amount * 1_000_000);
+
+    const tx = await client.withdrawEscrow(owner, amountLamports, usdcMint);
+
+    const { blockhash, lastValidBlockHeight } = await client.provider.connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.lastValidBlockHeight = lastValidBlockHeight;
+    tx.feePayer = owner;
+
+    const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+    const base64 = serialized.toString('base64');
+
+    res.status(200).json({
+      success: true,
+      data: {
+        unsignedTxBase64: base64,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getVaultBalance = async (req: SIWSRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    if (!req.solanaWallet) {
+      res.status(401).json({ success: false, error: { message: 'Solana wallet not authenticated', code: 'UNAUTHORIZED' } });
+      return;
+    }
+
+    const client = getSolanaClient();
+    const owner = req.solanaWallet.publicKey;
+    const [userPda] = client.getUserPDA(owner);
+    const [vaultPda] = client.getVaultPDA(userPda);
+
+    const balance = await client.getVaultBalance(userPda);
+    
+    // Convert from lamports to USDC
+    const balanceUsdc = balance / 1_000_000;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        balance: balanceUsdc,
+        vaultPda: vaultPda.toBase58(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};

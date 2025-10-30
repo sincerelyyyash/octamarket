@@ -60,8 +60,12 @@ export const config = {
     file: process.env.LOG_FILE,
   },
   solana: {
-    rpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
-    usdcMint: process.env.SOLANA_USDC_MINT || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    network: process.env.SOLANA_NETWORK || 'devnet',
+    rpcUrl: process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
+    programId: process.env.SOLANA_PROGRAM_ID || 'DSzcxNHsezokjETdk9ymJYvR27bGS876g2EqoVxQraQE',
+    usdcMint: process.env.SOLANA_NETWORK === 'mainnet' 
+      ? (process.env.SOLANA_USDC_MINT || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')
+      : (process.env.DEVNET_USDC_MINT || '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'),
     treasuryAddress: process.env.SOLANA_TREASURY_ADDRESS || '',
     webhookSecret: process.env.SOLANA_WEBHOOK_SECRET || '',
   },

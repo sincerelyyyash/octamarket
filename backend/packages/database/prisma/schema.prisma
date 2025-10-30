@@ -308,6 +308,11 @@ model Trade {
   originalTradeId   String?       // Reference to original trade if this is a copy
   copiedByTraderId  String?       // Trader who copied this trade
   
+  // Solana on-chain fields
+  intentPda         String?       // On-chain intent PDA (if from on-chain intent)
+  copyIntentPda     String?       // On-chain copy intent PDA (if from copy trading)
+  positionPda       String?       // On-chain position PDA
+  
   // Metadata
   sourceData        Json?         // Raw data from source
   createdAt         DateTime      @default(now())
@@ -428,6 +433,12 @@ model TradeIntent {
   reason          String?
   error           String?
 
+  // Solana on-chain fields
+  intentPda       String?            // On-chain intent PDA address
+  settlementSig   String?            // Settlement transaction signature
+  onChainState    String?            // "OPEN" | "FILLED" | "CANCELLED" (mirror of on-chain state)
+  escrowAmount    Decimal?           @db.Decimal(20, 8)
+
   submittedAt     DateTime?
   filledAt        DateTime?
   failedAt        DateTime?
@@ -436,6 +447,7 @@ model TradeIntent {
 
   @@index([status])
   @@index([sourceMarketId])
+  @@index([intentPda])
 }
 
 // Solana wallet linking
@@ -488,4 +500,61 @@ model Transfer {
   updatedAt     DateTime          @updatedAt
 
   @@index([userId, asset, direction, status])
+}
+
+// On-chain position mirror (Solana program state)
+model OnChainPosition {
+  id            String   @id @default(cuid())
+  positionPda   String   @unique  // On-chain position PDA address
+  userId        String
+  userPda       String              // User PDA on-chain
+  marketId      String
+  quantity      Decimal  @db.Decimal(20, 8)
+  costBasis     Decimal  @db.Decimal(20, 8)
+  lastTradeAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId, marketId])
+  @@index([userPda])
+}
+
+// On-chain copy policy mirror (Solana program state)
+model OnChainCopyPolicy {
+  id              String   @id @default(cuid())
+  copyPolicyPda   String   @unique  // On-chain copy policy PDA address
+  userId          String
+  followerAddress String              // Follower wallet address
+  copyPercentage  Int                 // Basis points (0-10000)
+  maxCopyAmount   Decimal  @db.Decimal(20, 8)
+  maxDailyAmount  Decimal  @db.Decimal(20, 8)
+  expiry          DateTime
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@index([followerAddress])
+}
+
+// On-chain copy intent mirror (Solana program state)
+model OnChainCopyIntent {
+  id              String   @id @default(cuid())
+  copyIntentPda   String   @unique  // On-chain copy intent PDA address
+  followerId      String
+  followerAddress String
+  leaderTradeRef  String              // Reference to leader's trade
+  marketId        String
+  side            String              // "BUY" | "SELL"
+  quantity        Decimal  @db.Decimal(20, 8)
+  priceCap        Decimal  @db.Decimal(10, 8)
+  escrowAmount    Decimal  @db.Decimal(20, 8)
+  state           String              // "OPEN" | "FILLED" | "CANCELLED"
+  settlementSig   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([followerId])
+  @@index([leaderTradeRef])
+  @@index([copyIntentPda])
 }
