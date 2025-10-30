@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma, Prisma } from '@repo/database';
-import { config } from '../config/index.js';
+import { config } from '../config/index';
 
 const linkRequestSchema = z.object({
   address: z.string().min(32),
