@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import { authenticateToken } from '../middleware/auth.js';
-import { authenticateSolana } from '../middleware/siws.js';
+import { authenticateToken } from '../middleware/auth';
+import { linkWallet, getBalances, depositWebhook, jupiterQuote, jupiterBuildTx } from '../controllers/solanaController';
+import { authenticateSolana } from '../middleware/siws';
 import {
   linkWallet,
   getBalances,
@@ -14,7 +15,7 @@ import {
   buildFundEscrow,
   buildWithdrawEscrow,
   getVaultBalance,
-} from '../controllers/solanaController.js';
+} from '../controllers/solanaController';
 
 const router: Router = Router();
 

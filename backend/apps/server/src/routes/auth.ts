@@ -10,8 +10,8 @@ import {
   validateUpdateProfile,
   validateConnectWallet
 } from '../controllers/authController.js';
-import { authenticate } from '../middleware/auth.js';
-import { rateLimiter } from '../middleware/rateLimiter.js';
+import { authenticate } from '../middleware/auth';
+import { rateLimiter } from '../middleware/rateLimiter';
 
 const router: Router = Router();
 

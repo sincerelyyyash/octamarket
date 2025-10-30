@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma, Prisma } from '@repo/database';
-import { config } from '../config/index.js';
+import { config } from '../config/index';
 import { Connection, PublicKey, Transaction } from '@solana/web3.js';
 import { OctamarketClient, encodeIntentId, encodeMarketId } from '@repo/solana-program';
 import type { SIWSRequest } from '../middleware/siws.js';

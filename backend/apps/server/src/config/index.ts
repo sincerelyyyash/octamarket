@@ -1,5 +1,7 @@
 import dotenv from 'dotenv';
 
+// Load env from backend root first, then local .env in app if present
+dotenv.config({ path: '../../.env' });
 dotenv.config();
 
 export const config = {
@@ -16,7 +18,11 @@ export const config = {
     host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT || '6379'),
     password: process.env.REDIS_PASSWORD,
-    db: parseInt(process.env.REDIS_DB || '0'),
+    db: (() => {
+      const raw = (process.env.REDIS_DB ?? '').trim();
+      const parsed = parseInt(raw === '' ? '0' : raw, 10);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    })(),
     retryDelayOnFailover: 100,
     enableReadyCheck: false,
     maxRetriesPerRequest: null,

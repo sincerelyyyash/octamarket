@@ -7,9 +7,9 @@ import {
   getLeaderboardStats,
   validatePagination,
   validateTimeframe,
-} from '../controllers/statsController.js';
-import { cacheMiddleware } from '../middleware/cache.js';
-import { config } from '../config/index.js';
+} from '../controllers/statsController';
+import { cacheMiddleware } from '../middleware/cache';
+import { config } from '../config/index';
 
 const router: Router = Router();
 

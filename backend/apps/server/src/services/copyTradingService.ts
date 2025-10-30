@@ -1,5 +1,5 @@
 import { prisma, Prisma } from '@repo/database';
-import { logger } from '../utils/logger.js';
+import { logger } from '../utils/logger';
 import type { 
   CopyTradingSettings, 
   TraderFollowResponse 
