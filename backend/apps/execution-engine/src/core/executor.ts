@@ -5,6 +5,8 @@ import { KalshiAdapter } from '../venues/kalshi/adapter.js';
 import { PolymarketAdapter } from '../venues/polymarket/adapter.js';
 import { SignerClient } from '../signer/client.js';
 import { reportState } from '../persistence/reporter.js';
+import { SolanaSettlement } from '../solana/settlement.js';
+
 
 export type ExecutionResult = {
   success: boolean;
@@ -13,6 +15,10 @@ export type ExecutionResult = {
   avgPrice?: number;
   fills?: Array<{ qty: number; px: number; ts: string }>;
   error?: string;
+  settlementSignature?: string;
+  intentPda?: string;
+  positionPda?: string;
+
 };
 
 const MAX_POLL_ATTEMPTS = 20;
@@ -20,12 +26,24 @@ const POLL_INTERVAL_MS = 2000;
 
 export class OrderExecutor {
   private signerClient: SignerClient;
+  private solanaSettlement?: SolanaSettlement;
 
   constructor(
     private logger: Logger,
     private config: EngineConfig
   ) {
     this.signerClient = new SignerClient(config);
+    
+    // Initialize Solana settlement if enabled
+    if (process.env.SOLANA_SETTLEMENT_ENABLED === 'true') {
+      try {
+        this.solanaSettlement = new SolanaSettlement(logger);
+        logger.info('Solana settlement enabled');
+      } catch (error: any) {
+        logger.warn('Failed to initialize Solana settlement', { error: error.message });
+      }
+    }
+
   }
 
   async executeOnKalshi(
@@ -94,6 +112,8 @@ export class OrderExecutor {
         const isYes = (intent.outcomeIndex ?? 0) === 0;
         const rawCents = isYes ? (finalStatus.yes_price ?? Math.round(targetPrice * 100)) : (finalStatus.no_price ?? Math.round(targetPrice * 100));
         const avgPrice = rawCents / 100;
+        
+
         await reportState(this.config, intent.intentId, 'FILLED', {
           venue: 'KALSHI',
           orderId: orderResp.order_id,
@@ -101,13 +121,46 @@ export class OrderExecutor {
           fills: [{ qty: intent.quantity, px: avgPrice, ts: new Date().toISOString() }],
         });
 
-        return {
+        const result: ExecutionResult = {
+
           success: true,
           orderId: orderResp.order_id,
           venue: 'KALSHI',
           avgPrice,
           fills: [{ qty: intent.quantity, px: avgPrice, ts: new Date().toISOString() }],
         };
+
+        // Settle fill on-chain if Solana settlement is enabled
+        if (this.solanaSettlement && intent.userWallet && intent.marketId) {
+          try {
+            const settlement = await this.solanaSettlement.settleFill({
+              intentId: intent.intentId,
+              userOwner: intent.userWallet,
+              marketId: intent.marketId,
+              venue: 'KALSHI',
+              filledQuantity: Math.floor(intent.quantity * 1_000_000), // Convert to lamports
+              avgPrice: Math.floor(avgPrice * 1_000_000), // Convert to lamports
+              txRef: orderResp.order_id,
+            });
+
+            result.settlementSignature = settlement.signature;
+            result.intentPda = settlement.intentPda;
+            result.positionPda = settlement.positionPda;
+
+            this.logger.info('On-chain settlement complete', {
+              intentId: intent.intentId,
+              signature: settlement.signature,
+            });
+          } catch (error: any) {
+            this.logger.error('Failed to settle on-chain (non-fatal)', {
+              intentId: intent.intentId,
+              error: error.message,
+            });
+          }
+        }
+
+        return result;
+
       }
 
       // If not filled, cancel and report failure
@@ -191,6 +244,7 @@ export class OrderExecutor {
 
       if (filled) {
         const avgPrice = finalStatus.price || targetPrice;
+
         await reportState(this.config, intent.intentId, 'FILLED', {
           venue: 'POLYMARKET',
           orderId: orderResp.orderId,
@@ -198,13 +252,45 @@ export class OrderExecutor {
           fills: [{ qty: intent.quantity, px: avgPrice, ts: new Date().toISOString() }],
         });
 
-        return {
+        const result: ExecutionResult = {
           success: true,
           orderId: orderResp.orderId,
           venue: 'POLYMARKET',
           avgPrice,
           fills: [{ qty: intent.quantity, px: avgPrice, ts: new Date().toISOString() }],
         };
+
+        // Settle fill on-chain if Solana settlement is enabled
+        if (this.solanaSettlement && intent.userWallet && intent.marketId) {
+          try {
+            const settlement = await this.solanaSettlement.settleFill({
+              intentId: intent.intentId,
+              userOwner: intent.userWallet,
+              marketId: intent.marketId,
+              venue: 'POLYMARKET',
+              filledQuantity: Math.floor(intent.quantity * 1_000_000), // Convert to lamports
+              avgPrice: Math.floor(avgPrice * 1_000_000), // Convert to lamports
+              txRef: orderResp.orderId,
+            });
+
+            result.settlementSignature = settlement.signature;
+            result.intentPda = settlement.intentPda;
+            result.positionPda = settlement.positionPda;
+
+            this.logger.info('On-chain settlement complete', {
+              intentId: intent.intentId,
+              signature: settlement.signature,
+            });
+          } catch (error: any) {
+            this.logger.error('Failed to settle on-chain (non-fatal)', {
+              intentId: intent.intentId,
+              error: error.message,
+            });
+          }
+        }
+
+        return result;
+
       }
 
       // If not filled, cancel and report failure
