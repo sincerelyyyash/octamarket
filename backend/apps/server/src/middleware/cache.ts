@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import { cache } from '../utils/redis.js';
-import { config } from '../config/index.js';
-import { cacheLogger } from '../utils/logger.js';
+import { cache } from '../utils/redis';
+import { config } from '../config/index';
+import { cacheLogger } from '../utils/logger';
 
 export interface CacheOptions {
   ttl?: number;

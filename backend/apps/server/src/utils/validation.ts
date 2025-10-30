@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError, ZodSchema } from 'zod';
-import { ResponseHelper } from './response.js';
-import { logger } from './logger.js';
+import { ResponseHelper } from './response';
+import { logger } from './logger';
 
 export class ValidationError extends Error {
   constructor(
