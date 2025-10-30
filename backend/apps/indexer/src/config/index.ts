@@ -28,6 +28,7 @@ export const config: IndexerConfig = {
       wsUrl: process.env.SOLANA_WS_URL || 'wss://api.devnet.solana.com',
       programId: process.env.SOLANA_PROGRAM_ID || 'DSzcxNHsezokjETdk9ymJYvR27bGS876g2EqoVxQraQE',
     } as any,
+
     // Disabled sources - not currently working
     // {
     //   source: MarketSource.AUGUR,

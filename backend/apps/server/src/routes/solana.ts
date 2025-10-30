@@ -19,6 +19,7 @@ import {
 const router: Router = Router();
 
 // Legacy routes (JWT auth)
+
 router.post('/link', authenticateToken, linkWallet);
 router.get('/balances', authenticateToken, getBalances);
 router.post('/deposit-webhook', depositWebhook);

@@ -7,6 +7,7 @@ import { SignerClient } from '../signer/client.js';
 import { reportState } from '../persistence/reporter.js';
 import { SolanaSettlement } from '../solana/settlement.js';
 
+
 export type ExecutionResult = {
   success: boolean;
   orderId?: string;
@@ -17,6 +18,7 @@ export type ExecutionResult = {
   settlementSignature?: string;
   intentPda?: string;
   positionPda?: string;
+
 };
 
 const MAX_POLL_ATTEMPTS = 20;
@@ -41,6 +43,7 @@ export class OrderExecutor {
         logger.warn('Failed to initialize Solana settlement', { error: error.message });
       }
     }
+
   }
 
   async executeOnKalshi(
@@ -110,6 +113,7 @@ export class OrderExecutor {
         const rawCents = isYes ? (finalStatus.yes_price ?? Math.round(targetPrice * 100)) : (finalStatus.no_price ?? Math.round(targetPrice * 100));
         const avgPrice = rawCents / 100;
         
+
         await reportState(this.config, intent.intentId, 'FILLED', {
           venue: 'KALSHI',
           orderId: orderResp.order_id,
@@ -118,6 +122,7 @@ export class OrderExecutor {
         });
 
         const result: ExecutionResult = {
+
           success: true,
           orderId: orderResp.order_id,
           venue: 'KALSHI',
@@ -155,6 +160,7 @@ export class OrderExecutor {
         }
 
         return result;
+
       }
 
       // If not filled, cancel and report failure
@@ -238,7 +244,7 @@ export class OrderExecutor {
 
       if (filled) {
         const avgPrice = finalStatus.price || targetPrice;
-        
+
         await reportState(this.config, intent.intentId, 'FILLED', {
           venue: 'POLYMARKET',
           orderId: orderResp.orderId,
@@ -284,6 +290,7 @@ export class OrderExecutor {
         }
 
         return result;
+
       }
 
       // If not filled, cancel and report failure

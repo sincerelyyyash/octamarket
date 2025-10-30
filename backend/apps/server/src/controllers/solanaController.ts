@@ -512,5 +512,3 @@ export const getVaultBalance = async (req: SIWSRequest, res: Response, next: Nex
     next(error);
   }
 };
-
-
