@@ -12,9 +12,9 @@ import {
   validatePagination,
   validateId,
   validatePriceHistoryQuery,
-} from '../controllers/marketController.js';
-import { cacheMiddleware } from '../middleware/cache.js';
-import { config } from '../config/index.js';
+} from '../controllers/marketController';
+import { cacheMiddleware } from '../middleware/cache';
+import { config } from '../config/index';
 
 const router: Router = Router();
 
