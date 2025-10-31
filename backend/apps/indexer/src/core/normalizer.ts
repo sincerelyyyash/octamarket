@@ -63,14 +63,32 @@ export class MarketNormalizer {
     let outcomes: any[] = [];
     
     if (data.outcomes && Array.isArray(data.outcomes)) {
-      outcomes = data.outcomes.map((outcome: any, index: number) => ({
-        title: outcome.name || outcome.title || `Outcome ${index + 1}`,
-        description: outcome.description,
-        index,
-        currentPrice: outcome.price ? parseFloat(outcome.price) : undefined,
-        currentVolume: outcome.volume ? parseFloat(outcome.volume) : undefined,
-        currentLiquidity: outcome.liquidity ? parseFloat(outcome.liquidity) : undefined,
-      }));
+      outcomes = data.outcomes.map((outcome: any, index: number) => {
+        const title =
+          typeof outcome === 'string'
+            ? outcome
+            : outcome?.name || outcome?.title || `Outcome ${index + 1}`;
+        const price =
+          typeof outcome === 'object' && outcome?.price != null
+            ? parseFloat(outcome.price)
+            : undefined;
+        const volume =
+          typeof outcome === 'object' && outcome?.volume != null
+            ? parseFloat(outcome.volume)
+            : undefined;
+        const liquidity =
+          typeof outcome === 'object' && outcome?.liquidity != null
+            ? parseFloat(outcome.liquidity)
+            : undefined;
+        return {
+          title,
+          description: typeof outcome === 'object' ? outcome?.description : undefined,
+          index,
+          currentPrice: price,
+          currentVolume: volume,
+          currentLiquidity: liquidity,
+        };
+      });
     } else if (data.tokens && Array.isArray(data.tokens)) {
       // Alternative format with tokens
       outcomes = data.tokens.map((token: any, index: number) => ({
@@ -84,8 +102,34 @@ export class MarketNormalizer {
     }
 
     // Use event title as fallback if market doesn't have a question
-    const title = data.question || data.title || data.event_title || 'Unknown Market';
-    const description = data.description || data.event_description;
+    // Be defensive: some sources may provide arrays/objects here; ensure we return a clean string
+    const pickTitle = (value: any): string | undefined => {
+      if (!value) return undefined;
+      if (typeof value === 'string') return value;
+      if (Array.isArray(value)) {
+        const firstString = value.find((v) => typeof v === 'string');
+        if (firstString) return firstString;
+        // As a very last resort, stringify the first item
+        return String(value[0]);
+      }
+      if (typeof value === 'object' && typeof value.title === 'string') return value.title;
+      return undefined;
+    };
+
+    const title =
+      pickTitle(data.question) ||
+      pickTitle(data.title) ||
+      pickTitle(data.event_title) ||
+      'Unknown Market';
+
+    const pickDescription = (value: any): string | undefined => {
+      if (!value) return undefined;
+      if (typeof value === 'string') return value;
+      if (typeof value === 'object' && typeof value.description === 'string') return value.description;
+      return undefined;
+    };
+
+    const description = pickDescription(data.description) || pickDescription(data.event_description);
 
     return {
       id: data.condition_id || data.id,
