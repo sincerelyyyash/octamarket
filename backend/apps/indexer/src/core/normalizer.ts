@@ -165,10 +165,16 @@ export class MarketNormalizer {
       },
     ] : [];
 
+    // Format description for parlay markets
+    let description = data.subtitle || data.description;
+    if (description && typeof description === 'string') {
+      description = this.formatKalshiDescription(description);
+    }
+
     return {
       id: data.ticker || data.id,
       title: data.title || data.question,
-      description: data.subtitle || data.description,
+      description,
       category: data.category,
       tags: data.tags || [],
       endDate: data.expiration_time ? new Date(data.expiration_time) : undefined,
@@ -179,6 +185,31 @@ export class MarketNormalizer {
       resolvedOutcome: data.result,
       outcomes,
     };
+  }
+
+  private formatKalshiDescription(description: string): string {
+    // Check if this is a comma-separated list of conditions (parlay market)
+    // Pattern: "yes PlayerName: Stat,no PlayerName: Stat,..."
+    const conditionPattern = /^(yes|no)\s+\w+.*?,/i;
+    
+    if (!conditionPattern.test(description)) {
+      // Not a parlay market, return as-is
+      return description;
+    }
+
+    // Parse and format conditions
+    const conditions = description.split(',').filter(c => c.trim());
+    
+    // Format each condition by removing the yes/no prefix and joining with newlines
+    const formattedConditions = conditions.map(condition => {
+      const trimmed = condition.trim();
+      // Remove "yes " or "no " prefix
+      const cleaned = trimmed.replace(/^(yes|no)\s+/i, '');
+      return cleaned;
+    });
+
+    // Join with newlines for better readability
+    return formattedConditions.join('\n');
   }
 
   private normalizeAugur(data: any): MarketData {

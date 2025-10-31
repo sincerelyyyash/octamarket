@@ -11,9 +11,9 @@ import {
   validatePagination,
   validateId,
   validateTradeQuery,
-} from '../controllers/traderController.js';
-import { cacheMiddleware } from '../middleware/cache.js';
-import { config } from '../config/index.js';
+} from '../controllers/traderController';
+import { cacheMiddleware } from '../middleware/cache';
+import { config } from '../config/index';
 
 const router: Router = Router();
 

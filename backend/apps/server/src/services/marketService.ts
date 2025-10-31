@@ -1,8 +1,8 @@
 import { prisma, Prisma } from '@repo/database';
 import { MarketSource, MarketStatus } from '@repo/database';
-import { logger } from '../utils/logger.js';
-import { cache } from '../utils/redis.js';
-import { config } from '../config/index.js';
+import { logger } from '../utils/logger';
+import { cache } from '../utils/redis';
+import { config } from '../config/index';
 import type { 
   MarketFilters, 
   MarketResponse, 

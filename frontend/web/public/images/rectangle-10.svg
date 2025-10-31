@@ -1,0 +1,10 @@
+// Placeholder SVG for decorative rectangle 10
+<svg width="876" height="1214" viewBox="0 0 876 1214" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#14F195;stop-opacity:0.1" />
+      <stop offset="100%" style="stop-color:#4F46E5;stop-opacity:0.05" />
+    </linearGradient>
+  </defs>
+  <rect width="876" height="1214" fill="url(#grad2)" rx="20"/>
+</svg>

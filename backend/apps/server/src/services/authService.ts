@@ -1,8 +1,8 @@
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { prisma } from '@repo/database';
-import { config } from '../config/index.js';
-import { logger } from '../utils/logger.js';
+import { config } from '../config/index';
+import { logger } from '../utils/logger';
 import type { RegisterRequest, LoginRequest, UpdateProfileRequest, JwtPayload } from '../types/index.js';
 
 export class AuthService {
