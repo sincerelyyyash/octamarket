@@ -53,11 +53,11 @@ export default function OnboardingScreen() {
       // Mark onboarding as completed
       await AsyncStorage.setItem('hasSeenOnboarding', 'true');
       // Navigate to main app
-      router.replace('/(tabs)');
+      router.replace('/(tabs)/home');
     } catch (error) {
       console.error('Error saving onboarding status:', error);
       // Still navigate even if storage fails
-      router.replace('/(tabs)');
+      router.replace('/(tabs)/home');
     }
   };
 
@@ -87,7 +87,7 @@ export default function OnboardingScreen() {
       />
       
       {/* Background image overlay */}
-      <View style={styles.backgroundImageOverlay}>
+      <View pointerEvents="none" style={styles.backgroundImageOverlay}>
         <Image 
           source={require('@/assets/images/onboard.png')}
           style={styles.backgroundImage}
@@ -96,7 +96,7 @@ export default function OnboardingScreen() {
       </View>
 
       {/* Glow effects - First group */}
-      <View style={styles.glowContainer1}>
+      <View pointerEvents="none" style={styles.glowContainer1}>
         <Animated.View 
           style={[
             styles.glowShape,
@@ -195,7 +195,7 @@ export default function OnboardingScreen() {
       </View>
 
       {/* Glow effects - Second group */}
-      <View style={styles.glowContainer2}>
+      <View pointerEvents="none" style={styles.glowContainer2}>
         <Animated.View 
           style={[
             styles.glowShape,
@@ -344,7 +344,7 @@ export default function OnboardingScreen() {
       </TouchableOpacity>
 
       {/* Border overlay */}
-      <View style={styles.borderOverlay} />
+      <View pointerEvents="none" style={styles.borderOverlay} />
     </View>
   );
 }

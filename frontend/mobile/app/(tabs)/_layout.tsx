@@ -15,8 +15,53 @@ export default function TabLayout() {
         tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
         tabBarButton: HapticTab,
+        sceneStyle: { backgroundColor: 'transparent' },
       }}>
-      {/* Add your custom tabs here */}
+      <Tabs.Screen
+        name="home"
+        options={{
+          title: 'Home',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="house.fill" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="markets"
+        options={{
+          title: 'Markets',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="chart.bar" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="leaderboard"
+        options={{
+          title: 'Leaderboard',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="rosette" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="watchlist"
+        options={{
+          title: 'Watchlist',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="tray.full" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: 'Profile',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="person" color={color} />
+          ),
+        }}
+      />
     </Tabs>
   );
 }
