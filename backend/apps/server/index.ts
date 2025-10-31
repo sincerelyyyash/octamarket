@@ -3,25 +3,25 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
-import { config } from './src/config/index.js';
-import { logger, requestLogger } from './src/utils/logger.js';
-import { redis } from './src/utils/redis.js';
+import { config } from './src/config/index';
+import { logger, requestLogger } from './src/utils/logger';
+import { redis } from './src/utils/redis';
 import { prisma } from '@repo/database';
 
 // Import middleware
-import { errorHandler, notFoundHandler } from './src/middleware/errorHandler.js';
-import { generalRateLimit, authRateLimit } from './src/middleware/rateLimiter.js';
+import { errorHandler, notFoundHandler } from './src/middleware/errorHandler';
+import { generalRateLimit, authRateLimit } from './src/middleware/rateLimiter';
 
 // Import routes
-import authRoutes from './src/routes/auth.js';
-import marketRoutes from './src/routes/markets.js';
-import leaderboardRoutes from './src/routes/leaderboard.js';
-import traderRoutes from './src/routes/traders.js';
-import tradesRoutes from './src/routes/trades.js';
-import copyTradingRoutes from './src/routes/copy-trading.js';
-import statsRoutes from './src/routes/stats.js';
-import solanaRoutes from './src/routes/solana.js';
-import internalRoutes from './src/routes/internal.js';
+import authRoutes from './src/routes/auth';
+import marketRoutes from './src/routes/markets';
+import leaderboardRoutes from './src/routes/leaderboard';
+import traderRoutes from './src/routes/traders';
+import tradesRoutes from './src/routes/trades';
+import copyTradingRoutes from './src/routes/copy-trading';
+import statsRoutes from './src/routes/stats';
+import solanaRoutes from './src/routes/solana';
+import internalRoutes from './src/routes/internal';
 
 class Server {
   private app: express.Application;

@@ -1,5 +1,6 @@
 import winston from 'winston';
-import { config } from '../config/index.js';
+import path from 'path';
+import { config } from '../config/index';
 
 const logFormat = winston.format.combine(
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
@@ -17,12 +18,16 @@ const transports: winston.transport[] = [
 ];
 
 if (config.logging.file) {
-  transports.push(
-    new winston.transports.File({
-      filename: config.logging.file,
-      format: logFormat,
-    })
-  );
+  const logDir = path.dirname(config.logging.file);
+  // Only add file transport if a valid directory is provided
+  if (logDir && logDir !== '.' && logDir !== path.sep) {
+    transports.push(
+      new winston.transports.File({
+        filename: config.logging.file,
+        format: logFormat,
+      })
+    );
+  }
 }
 
 export const logger = winston.createLogger({

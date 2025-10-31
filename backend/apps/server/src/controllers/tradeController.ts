@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma, Prisma } from '@repo/database';
-import { redis } from '../utils/redis.js';
-import { config } from '../config/index.js';
+import { redis } from '../utils/redis';
+import { config } from '../config/index';
 
 const streamKey: string = (config as any)?.queue?.tradeIntentsStream || 'trades.intents';
 

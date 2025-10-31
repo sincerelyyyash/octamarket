@@ -1,6 +1,6 @@
 import { prisma } from '@repo/database';
 import { MarketSource } from '@repo/database';
-import { logger } from '../utils/logger.js';
+import { logger } from '../utils/logger';
 import type { 
   TraderFilters, 
   TraderResponse, 

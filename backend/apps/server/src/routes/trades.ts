@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { authenticateToken } from '../middleware/auth.js';
-import { validateCreateTrade, createTrade, getTradeStatus, streamTradeStatus, listRecentTrades } from '../controllers/tradeController.js';
+import { authenticateToken } from '../middleware/auth';
+import { validateCreateTrade, createTrade, getTradeStatus, streamTradeStatus, listRecentTrades } from '../controllers/tradeController';
 
 const router: Router = Router();
 

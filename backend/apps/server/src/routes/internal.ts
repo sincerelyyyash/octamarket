@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { config } from '../config/index.js';
+import { config } from '../config/index';
 import { prisma, Prisma } from '@repo/database';
-import { redis } from '../utils/redis.js';
+import { redis } from '../utils/redis';
 
 const router: ReturnType<typeof Router> = Router();
 

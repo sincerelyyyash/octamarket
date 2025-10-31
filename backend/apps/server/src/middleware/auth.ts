@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import { authService } from '../services/authService.js';
-import { ResponseHelper } from '../utils/response.js';
-import { logger } from '../utils/logger.js';
+import { authService } from '../services/authService';
+import { ResponseHelper } from '../utils/response';
+import { logger } from '../utils/logger';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
