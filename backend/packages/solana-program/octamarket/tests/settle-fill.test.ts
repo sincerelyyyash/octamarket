@@ -88,20 +88,17 @@ describe("settle_fill", () => {
     catch (err: any) { chai.expect(err.message).to.match(/Insufficient escrow/i); }
   });
 
-  it("settle_fill: fails if relayer is not signer or wrong relayer", async () => {
+  it("settle_fill: succeeds with any relayer signer (no allowlist)", async () => {
     const user = Keypair.generate();
     const intentId = Buffer.from("ccccccaa112233441100223344556677", "hex");
     const marketId = Buffer.alloc(32);
-    const relayer = provider.wallet.payer;
     const wrongRelayer = Keypair.generate();
     await provider.connection.requestAirdrop(user.publicKey, 2e9);
     await provider.connection.requestAirdrop(wrongRelayer.publicKey, 2e9);
     await sleep(600);
     const txInit = await client.initUser(user.publicKey); txInit.feePayer = user.publicKey; txInit.partialSign(user); await provider.connection.sendTransaction(txInit, [user]);
-    try {
-      const openTx = await client.openIntent(user.publicKey, intentId, marketId, { buy: {} }, 1, 500_000, Math.floor(Date.now() / 1000) + 1000, usdcMint);
-      openTx.feePayer = user.publicKey; openTx.partialSign(user); await provider.connection.sendTransaction(openTx, [user]);
-    } catch {}
+    const openTx = await client.openIntent(user.publicKey, intentId, marketId, { buy: {} }, 1, 500_000, Math.floor(Date.now() / 1000) + 1000, usdcMint);
+    openTx.feePayer = user.publicKey; openTx.partialSign(user); await provider.connection.sendTransaction(openTx, [user]);
     const txRef = Buffer.alloc(64);
     const settleTx = await client.settleFill(
       wrongRelayer.publicKey,
@@ -115,7 +112,10 @@ describe("settle_fill", () => {
       usdcMint
     );
     settleTx.feePayer = wrongRelayer.publicKey; settleTx.partialSign(wrongRelayer);
-    try { await provider.connection.sendTransaction(settleTx, [wrongRelayer]); throw new Error("Should fail"); }
-    catch (err: any) { chai.expect(err.message).to.match(/signer|relayer|authority/i); }
+    await provider.connection.sendTransaction(settleTx, [wrongRelayer]);
+    const userPDA = client.getUserPDA(user.publicKey)[0];
+    const intentPDA = client.getIntentPDA(userPDA, intentId)[0];
+    const intent = await client.program.account.intent.fetch(intentPDA);
+    chai.expect(intent.state["filled"]).to.not.be.undefined;
   });
 });
