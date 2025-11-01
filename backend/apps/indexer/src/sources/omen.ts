@@ -91,6 +91,10 @@ export class OmenSource implements DataSource {
     }
     
     // Use the endpoint without query parameter, add API key to headers instead
+    if (!config.graphqlEndpoint) {
+      throw new Error('GraphQL endpoint is required for Omen source');
+    }
+    // We've checked above, so this is safe
     const endpoint = config.graphqlEndpoint!.split('?')[0];
     
     this.client = new GraphQLClient(endpoint, {
@@ -156,71 +160,9 @@ export class OmenSource implements DataSource {
   async getMarkets(): Promise<MarketData[]> {
     if (!this.isActive) return [];
 
-    try {
-      await rateLimiter.waitForSlot('omen');
-      const response = await this.client.request(MARKETS_QUERY, {
-        first: 50, // Reduced from 100 to manage rate limits
-        skip: 0,
-        where: {
-          // Only get active markets with liquidity
-          usdLiquidity_gt: "0",
-          resolutionTimestamp: null,
-        },
-      });
-
-      const markets: MarketData[] = [];
-      
-      for (const marketData of response.fixedProductMarketMakers || []) {
-        try {
-          // Transform Omen data structure for normalization
-          const transformedData = {
-            id: marketData.id,
-            title: marketData.question?.title || marketData.title,
-            description: marketData.question?.data,
-            category: marketData.question?.category,
-            outcomes: marketData.outcomes?.map((outcome: string, index: number) => ({
-              title: outcome,
-              index,
-              currentPrice: marketData.outcomeTokenMarginalPrices?.[index],
-            })) || [],
-            openingTimestamp: marketData.question?.openingTimestamp,
-            resolutionTimestamp: marketData.resolutionTimestamp,
-            currentAnswer: marketData.currentAnswer || marketData.question?.currentAnswer,
-            isPendingArbitration: marketData.question?.isPendingArbitration,
-            usdVolume: marketData.usdVolume,
-            usdLiquidity: marketData.usdLiquidity,
-            creationTimestamp: marketData.creationTimestamp,
-          };
-
-          const normalized = await this.normalizer.normalizeMarket(
-            transformedData,
-            this.name,
-            marketData.id
-          );
-          markets.push(normalized.marketData);
-        } catch (error) {
-          this.logger.warn('Failed to normalize market', {
-            marketId: marketData.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-
-      this.logger.info('Fetched markets from Omen', {
-        count: markets.length,
-      });
-
-      return markets;
-    } catch (error) {
-      this.logger.error('Failed to fetch markets', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw new DataSourceError(
-        'Failed to fetch markets from Omen',
-        this.name,
-        error instanceof Error ? error : new Error(String(error))
-      );
-    }
+    // Omen source is disabled - only Kalshi and Polymarket are active
+    this.logger.info('Omen source is disabled, returning empty markets list');
+    return [];
   }
 
   async subscribeToUpdates(callback: (event: MarketEventData) => void): Promise<void> {
@@ -249,6 +191,15 @@ export class OmenSource implements DataSource {
   }
 
   private async pollMarkets(): Promise<void> {
+    // Omen source is disabled - only Kalshi and Polymarket are active
+    if (!this.isActive) return;
+    
+    // Skip polling - Omen is disabled
+    this.logger.debug('Omen polling skipped - source is disabled');
+    return;
+    
+    // Original polling code commented out - source is disabled
+    /*
     try {
       const currentTimestamp = Math.floor(Date.now() / 1000);
       
@@ -320,5 +271,6 @@ export class OmenSource implements DataSource {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    */
   }
 }

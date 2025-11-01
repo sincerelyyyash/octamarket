@@ -9,7 +9,8 @@ export const config: IndexerConfig = {
     {
       source: MarketSource.POLYMARKET,
       restEndpoint: 'https://gamma-api.polymarket.com', 
-      wsEndpoint: 'wss://clob.polymarket.com/ws',
+      clobEndpoint: 'https://clob.polymarket.com',
+      wsEndpoint: 'wss://ws-subscriptions-clob.polymarket.com/ws/market',
       pollInterval: 30000, // 30 seconds
       enabled: true,
     },
@@ -59,6 +60,20 @@ export const config: IndexerConfig = {
     defaultInterval: 60000, // 1 minute
     priceUpdateInterval: 30000, // 30 seconds
     leaderboardInterval: 300000, // 5 minutes
+    tiered: {
+      highVolume: {
+        threshold: 100000, // $100k+
+        interval: 30000, // 30 seconds
+      },
+      mediumVolume: {
+        threshold: 10000, // $10k-$100k
+        interval: 120000, // 2 minutes
+      },
+      lowVolume: {
+        threshold: 0, // <$10k
+        interval: 300000, // 5 minutes
+      },
+    },
   },
   deduplication: {
     enabled: true,

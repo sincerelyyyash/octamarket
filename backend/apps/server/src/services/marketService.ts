@@ -12,6 +12,107 @@ import type {
 } from '../types/index.js';
 
 export class MarketService {
+  /**
+   * Get per-source prices for outcomes
+   */
+  private async getOutcomePrices(outcomeIds: string[]): Promise<Map<string, Array<{
+    source: MarketSource;
+    price: number;
+    volume?: number;
+    liquidity?: number;
+    timestamp: string;
+  }>>> {
+    if (outcomeIds.length === 0) {
+      return new Map();
+    }
+
+    // Get latest price history entries per source per outcome
+    const latestPrices = await prisma.priceHistory.findMany({
+      where: {
+        outcomeId: { in: outcomeIds },
+      },
+      orderBy: { timestamp: 'desc' },
+    });
+
+    // Group by outcomeId, then by source (keep only latest per source)
+    const pricesByOutcome = new Map<string, Map<MarketSource, typeof latestPrices[0]>>();
+    for (const price of latestPrices) {
+      if (!price.outcomeId) continue;
+      if (!pricesByOutcome.has(price.outcomeId)) {
+        pricesByOutcome.set(price.outcomeId, new Map());
+      }
+      const outcomePrices = pricesByOutcome.get(price.outcomeId)!;
+      // Only keep latest price per source
+      if (!outcomePrices.has(price.source) || 
+          (outcomePrices.get(price.source)!.timestamp < price.timestamp)) {
+        outcomePrices.set(price.source, price);
+      }
+    }
+
+    // Convert to response format
+    const result = new Map<string, Array<{
+      source: MarketSource;
+      price: number;
+      volume?: number;
+      liquidity?: number;
+      timestamp: string;
+    }>>();
+
+    for (const [outcomeId, sourcePrices] of pricesByOutcome.entries()) {
+      const prices = Array.from(sourcePrices.values()).map(ph => ({
+        source: ph.source,
+        price: parseFloat(ph.price.toString()),
+        volume: ph.volume ? parseFloat(ph.volume.toString()) : undefined,
+        liquidity: ph.liquidity ? parseFloat(ph.liquidity.toString()) : undefined,
+        timestamp: ph.timestamp.toISOString(),
+      }));
+      result.set(outcomeId, prices);
+    }
+
+    return result;
+  }
+
+  /**
+   * Enrich outcome with per-source prices and best price
+   */
+  private enrichOutcome(
+    outcome: { id: string; title: string; description: string | null; index: number; currentPrice: any; currentVolume: any; currentLiquidity: any; isWinning: boolean | null },
+    pricesMap: Map<string, Array<{ source: MarketSource; price: number; volume?: number; liquidity?: number; timestamp: string }>>
+  ): MarketOutcomeResponse {
+    const prices = pricesMap.get(outcome.id) || [];
+    
+    // Calculate best price (highest for display - most favorable for holders)
+    let bestPrice: number | undefined;
+    let bestPriceSource: MarketSource | undefined;
+    
+    if (prices.length > 0) {
+      // Sort by price descending (highest first)
+      const sortedPrices = [...prices].sort((a, b) => b.price - a.price);
+      bestPrice = sortedPrices[0].price;
+      bestPriceSource = sortedPrices[0].source;
+    }
+
+    // Try to get price from multiple sources:
+    // 1. Best price from price history (most reliable)
+    // 2. Current price from outcome record (if available)
+    // 3. Calculate from other outcome if binary market (Yes + No should sum to ~1)
+    const outcomePrice = bestPrice ?? (outcome.currentPrice ? parseFloat(outcome.currentPrice.toString()) : undefined);
+
+    return {
+      id: outcome.id,
+      title: outcome.title,
+      description: outcome.description || undefined,
+      index: outcome.index,
+      currentPrice: outcomePrice,
+      currentVolume: outcome.currentVolume ? parseFloat(outcome.currentVolume.toString()) : undefined,
+      currentLiquidity: outcome.currentLiquidity ? parseFloat(outcome.currentLiquidity.toString()) : undefined,
+      isWinning: outcome.isWinning || undefined,
+      prices: prices.length > 0 ? prices : undefined,
+      bestPrice,
+      bestPriceSource,
+    };
+  }
+
   async getMarkets(
     filters: MarketFilters,
     page: number,
@@ -92,6 +193,10 @@ export class MarketService {
         prisma.market.count({ where }),
       ]);
 
+      // Get all outcome IDs for price lookup
+      const outcomeIds = markets.flatMap(m => m.outcomes.map(o => o.id));
+      const pricesMap = await this.getOutcomePrices(outcomeIds);
+
       const marketResponses: MarketResponse[] = markets.map(market => ({
         id: market.id,
         title: market.title,
@@ -108,16 +213,7 @@ export class MarketService {
         participantCount: market.participantCount || undefined,
         resolvedOutcome: market.resolvedOutcome || undefined,
         resolutionSource: market.resolutionSource || undefined,
-        outcomes: market.outcomes.map(outcome => ({
-          id: outcome.id,
-          title: outcome.title,
-          description: outcome.description || undefined,
-          index: outcome.index,
-          currentPrice: outcome.currentPrice ? parseFloat(outcome.currentPrice.toString()) : undefined,
-          currentVolume: outcome.currentVolume ? parseFloat(outcome.currentVolume.toString()) : undefined,
-          currentLiquidity: outcome.currentLiquidity ? parseFloat(outcome.currentLiquidity.toString()) : undefined,
-          isWinning: outcome.isWinning || undefined,
-        })),
+        outcomes: market.outcomes.map(outcome => this.enrichOutcome(outcome, pricesMap)),
         sourceMarkets: market.sourceMarkets.map(sourceMarket => ({
           id: sourceMarket.id,
           source: sourceMarket.source,
@@ -156,6 +252,10 @@ export class MarketService {
         return null;
       }
 
+      // Get per-source prices for outcomes
+      const outcomeIds = market.outcomes.map(o => o.id);
+      const pricesMap = await this.getOutcomePrices(outcomeIds);
+
       const marketResponse: MarketResponse = {
         id: market.id,
         title: market.title,
@@ -172,16 +272,7 @@ export class MarketService {
         participantCount: market.participantCount || undefined,
         resolvedOutcome: market.resolvedOutcome || undefined,
         resolutionSource: market.resolutionSource || undefined,
-        outcomes: market.outcomes.map(outcome => ({
-          id: outcome.id,
-          title: outcome.title,
-          description: outcome.description || undefined,
-          index: outcome.index,
-          currentPrice: outcome.currentPrice ? parseFloat(outcome.currentPrice.toString()) : undefined,
-          currentVolume: outcome.currentVolume ? parseFloat(outcome.currentVolume.toString()) : undefined,
-          currentLiquidity: outcome.currentLiquidity ? parseFloat(outcome.currentLiquidity.toString()) : undefined,
-          isWinning: outcome.isWinning || undefined,
-        })),
+        outcomes: market.outcomes.map(outcome => this.enrichOutcome(outcome, pricesMap)),
         sourceMarkets: market.sourceMarkets.map(sourceMarket => ({
           id: sourceMarket.id,
           source: sourceMarket.source,
@@ -238,6 +329,10 @@ export class MarketService {
         prisma.market.count({ where }),
       ]);
 
+      // Get all outcome IDs for price lookup
+      const outcomeIds = markets.flatMap(m => m.outcomes.map(o => o.id));
+      const pricesMap = await this.getOutcomePrices(outcomeIds);
+
       const marketResponses: MarketResponse[] = markets.map(market => ({
         id: market.id,
         title: market.title,
@@ -254,16 +349,7 @@ export class MarketService {
         participantCount: market.participantCount || undefined,
         resolvedOutcome: market.resolvedOutcome || undefined,
         resolutionSource: market.resolutionSource || undefined,
-        outcomes: market.outcomes.map(outcome => ({
-          id: outcome.id,
-          title: outcome.title,
-          description: outcome.description || undefined,
-          index: outcome.index,
-          currentPrice: outcome.currentPrice ? parseFloat(outcome.currentPrice.toString()) : undefined,
-          currentVolume: outcome.currentVolume ? parseFloat(outcome.currentVolume.toString()) : undefined,
-          currentLiquidity: outcome.currentLiquidity ? parseFloat(outcome.currentLiquidity.toString()) : undefined,
-          isWinning: outcome.isWinning || undefined,
-        })),
+        outcomes: market.outcomes.map(outcome => this.enrichOutcome(outcome, pricesMap)),
         sourceMarkets: market.sourceMarkets.map(sourceMarket => ({
           id: sourceMarket.id,
           source: sourceMarket.source,

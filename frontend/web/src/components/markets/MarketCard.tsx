@@ -65,6 +65,11 @@ export default function MarketCard({ market }: MarketCardProps) {
               {market.category}
             </span>
           )}
+          {market.sourceMarkets && market.sourceMarkets.length > 1 && (
+            <span className="text-[11px] font-mono text-green-400 bg-green-400/10 px-2 py-1 rounded-[6px]">
+              {market.sourceMarkets.length} Sources
+            </span>
+          )}
         </div>
 
         <h3 className="text-white text-[18px] md:text-[20px] font-semibold leading-[1.3] tracking-[-0.4px] mb-3 line-clamp-2 group-hover:text-white/90 transition-colors">
@@ -72,7 +77,7 @@ export default function MarketCard({ market }: MarketCardProps) {
         </h3>
 
         {market.description && (
-          <p className="text-white/70 text-[12px] font-mono leading-[1.5] mb-4 line-clamp-2">
+          <p className="text-white/70 text-[12px] font-mono leading-normal mb-4 line-clamp-2">
             {formatDescriptionPreview(market.description)}
           </p>
         )}
@@ -82,19 +87,36 @@ export default function MarketCard({ market }: MarketCardProps) {
         {/* Outcomes */}
         {market.outcomes && market.outcomes.length > 0 && (
           <div className="space-y-2 mb-4">
-            {market.outcomes.slice(0, 2).map((outcome) => (
-              <div
-                key={outcome.id}
-                className="flex items-center justify-between bg-white/5 rounded-[10px] px-3 py-2"
-              >
-                <span className="text-white text-[13px] font-mono">{outcome.title}</span>
-                <span className="text-white font-semibold text-[14px]">
-                  {outcome.currentPrice !== undefined
-                    ? `${(outcome.currentPrice * 100).toFixed(1)}%`
-                    : '-'}
-                </span>
-              </div>
-            ))}
+            {market.outcomes.slice(0, 2).map((outcome) => {
+              const displayPrice = outcome.bestPrice ?? outcome.currentPrice;
+              const hasMultipleSources = outcome.prices && outcome.prices.length > 1;
+              
+              return (
+                <div
+                  key={outcome.id}
+                  className="flex items-center justify-between bg-white/5 rounded-[10px] px-3 py-2"
+                >
+                  <span className="text-white text-[13px] font-mono">{outcome.title}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-white font-semibold text-[14px]">
+                      {displayPrice !== undefined
+                        ? `${(displayPrice * 100).toFixed(1)}%`
+                        : '-'}
+                    </span>
+                    {hasMultipleSources && (
+                      <span className="text-green-400 text-[10px] font-mono bg-green-400/10 px-1.5 py-0.5 rounded">
+                        Best
+                      </span>
+                    )}
+                    {outcome.bestPriceSource && hasMultipleSources && (
+                      <span className="text-white/50 text-[10px] font-mono">
+                        ({outcome.bestPriceSource})
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 

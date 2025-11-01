@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Instrument_Sans, DM_Mono } from "next/font/google";
 import "./globals.css";
+import "@solana/wallet-adapter-react-ui/styles.css";
 import Header from "../components/Header";
 import Footer from "../components/Footer";
 import { Providers } from "../components/Providers";

@@ -81,64 +81,69 @@ export class PolymarketSource implements DataSource {
     if (!this.isActive) return [];
 
     try {
-      const response = await axios.get(`${this.config.restEndpoint}/events`, {
+      // Use /events/pagination endpoint with proper filters
+      const response = await axios.get(`${this.config.restEndpoint}/events/pagination`, {
         params: {
           limit: 100,
-          offset: 0,
           active: true,
+          archived: false,
+          closed: false,
+          order: 'volume',
+          ascending: false,
         },
         timeout: 30000,
       });
 
       const markets: MarketData[] = [];
+      const events = response.data?.data || response.data || [];
       
-      // Polymarket /events endpoint returns events with nested markets
-      for (const eventData of response.data) {
+      // Polymarket /events/pagination returns events with nested markets
+      for (const eventData of events) {
         try {
           // Each event can have multiple markets
           const eventMarkets = eventData.markets || [];
           
           for (const marketData of eventMarkets) {
             try {
+              // Skip closed, archived, or resolved markets - be more aggressive
+              const status = (marketData.status || '').toLowerCase();
+              if (marketData.closed || marketData.archived || marketData.resolved ||
+                  status === 'closed' || status === 'settled' || status === 'resolved' ||
+                  status === 'archived' || status === 'canceled' || status === 'cancelled') {
+                this.logger.debug('Skipping resolved/closed market from Polymarket', {
+                  conditionId: marketData.conditionId || marketData.condition_id || marketData.id,
+                  closed: marketData.closed,
+                  archived: marketData.archived,
+                  resolved: marketData.resolved,
+                  status: marketData.status,
+                });
+                continue;
+              }
+
               // Add event-level data to market data
               const enrichedMarketData = {
                 ...marketData,
                 event_title: eventData.title,
                 event_description: eventData.description,
                 event_slug: eventData.slug,
+                event_category: eventData.category,
+                event_tags: eventData.tags,
               };
               
-              // Fetch token information from CLOB API
-              try {
-                const clobResponse = await axios.get('https://clob.polymarket.com/markets', {
-                  params: { condition_id: marketData.condition_id },
-                  timeout: 10000,
-                });
-                
-                if (clobResponse.data?.data && clobResponse.data.data.length > 0) {
-                  const clobMarket = clobResponse.data.data[0];
-                  if (clobMarket.tokens && clobMarket.tokens.length > 0) {
-                    // Add token information to market data
-                    enrichedMarketData.tokens = clobMarket.tokens;
-                    enrichedMarketData.token_id = clobMarket.tokens[0].token_id; // Store first token_id
-                  }
-                }
-              } catch (clobError) {
-                this.logger.debug('Failed to fetch CLOB token data', {
-                  conditionId: marketData.condition_id,
-                  error: clobError instanceof Error ? clobError.message : String(clobError),
-                });
+              // Extract CLOB token IDs from market data
+              if (marketData.clobTokenIds && Array.isArray(marketData.clobTokenIds)) {
+                enrichedMarketData.clobTokenIds = marketData.clobTokenIds;
               }
               
               const normalized = await this.normalizer.normalizeMarket(
                 enrichedMarketData,
                 this.name,
-                marketData.condition_id || marketData.id
+                marketData.conditionId || marketData.condition_id || marketData.id
               );
               markets.push(normalized.marketData);
             } catch (error) {
               this.logger.debug('Failed to normalize market', {
-                marketId: marketData.condition_id || marketData.id,
+                marketId: marketData.conditionId || marketData.condition_id || marketData.id,
                 error: error instanceof Error ? error.message : String(error),
                 marketData: JSON.stringify(marketData).substring(0, 200),
               });
@@ -166,6 +171,102 @@ export class PolymarketSource implements DataSource {
         this.name,
         error instanceof Error ? error : new Error(String(error))
       );
+    }
+  }
+
+  /**
+   * Fetch current prices from CLOB API for given token IDs
+   */
+  async fetchCLOBPrices(tokenIds: string[]): Promise<Map<string, { price: number; volume?: number; liquidity?: number }>> {
+    if (!this.config.clobEndpoint || tokenIds.length === 0) {
+      return new Map();
+    }
+
+    try {
+      // Batch request for last trade prices
+      const response = await axios.post(
+        `${this.config.clobEndpoint}/last-trades-prices`,
+        { token_ids: tokenIds },
+        {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 10000,
+        }
+      );
+
+      const priceMap = new Map<string, { price: number; volume?: number; liquidity?: number }>();
+      
+      if (response.data && typeof response.data === 'object') {
+        for (const [tokenId, priceData] of Object.entries(response.data)) {
+          if (typeof priceData === 'object' && priceData !== null) {
+            const data = priceData as any;
+            priceMap.set(tokenId, {
+              price: parseFloat(data.price || data.last_price || '0'),
+              volume: data.volume ? parseFloat(data.volume) : undefined,
+              liquidity: data.liquidity ? parseFloat(data.liquidity) : undefined,
+            });
+          }
+        }
+      }
+
+      this.logger.debug('Fetched CLOB prices', {
+        tokenCount: tokenIds.length,
+        pricesFound: priceMap.size,
+      });
+
+      return priceMap;
+    } catch (error) {
+      this.logger.error('Failed to fetch CLOB prices', {
+        tokenCount: tokenIds.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return new Map();
+    }
+  }
+
+  /**
+   * Fetch order books from CLOB API for given token IDs
+   */
+  async fetchCLOBOrderBooks(tokenIds: string[]): Promise<Map<string, { bestBid: number; bestAsk: number }>> {
+    if (!this.config.clobEndpoint || tokenIds.length === 0) {
+      return new Map();
+    }
+
+    try {
+      // Batch request for order books
+      const response = await axios.post(
+        `${this.config.clobEndpoint}/books`,
+        { token_ids: tokenIds },
+        {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 10000,
+        }
+      );
+
+      const orderBookMap = new Map<string, { bestBid: number; bestAsk: number }>();
+      
+      if (Array.isArray(response.data)) {
+        for (const book of response.data) {
+          if (book.token_id && (book.bids || book.asks)) {
+            const bestBid = book.bids && book.bids.length > 0 ? parseFloat(book.bids[0].price) : 0;
+            const bestAsk = book.asks && book.asks.length > 0 ? parseFloat(book.asks[0].price) : 0;
+            
+            orderBookMap.set(book.token_id, { bestBid, bestAsk });
+          }
+        }
+      }
+
+      this.logger.debug('Fetched CLOB order books', {
+        tokenCount: tokenIds.length,
+        booksFound: orderBookMap.size,
+      });
+
+      return orderBookMap;
+    } catch (error) {
+      this.logger.error('Failed to fetch CLOB order books', {
+        tokenCount: tokenIds.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return new Map();
     }
   }
 
@@ -275,6 +376,17 @@ export class PolymarketSource implements DataSource {
           const eventMarkets = eventData.markets || [];
           
           for (const marketData of eventMarkets) {
+            // Skip closed, archived, or resolved markets
+            if (marketData.closed || marketData.archived || marketData.resolved) {
+              this.logger.debug('Skipping resolved/closed market during polling', {
+                conditionId: marketData.condition_id || marketData.id,
+                closed: marketData.closed,
+                archived: marketData.archived,
+                resolved: marketData.resolved,
+              });
+              continue;
+            }
+
             // Add event-level data to market data
             const enrichedMarketData = {
               ...marketData,

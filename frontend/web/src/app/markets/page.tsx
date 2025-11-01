@@ -59,9 +59,9 @@ export default function MarketsPage() {
           <h1 className="text-[32px] md:text-[40px] font-semibold tracking-[-0.8px] mb-3">
             Prediction Markets
           </h1>
-          <p className="text-white/70 text-[14px] font-mono leading-[1.6] max-w-2xl">
-            Browse and trade on prediction markets from multiple sources.
-            Compare prices and get the best odds across platforms.
+          <p className="text-white/70 text-[14px] font-mono leading-normal max-w-2xl">
+            Browse and trade on aggregated prediction markets from multiple sources.
+            Compare prices across platforms and get the best odds automatically.
           </p>
         </div>
 

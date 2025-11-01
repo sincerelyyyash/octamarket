@@ -5,16 +5,16 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAppSelector } from '../store/hooks';
-import UserMenu from './auth/UserMenu';
-import LoginModal from './auth/LoginModal';
-import RegisterModal from './auth/RegisterModal';
+import WalletButton from './wallet/WalletButton';
+import { useWalletSync } from '../hooks/useWallet';
 
 export default function Header() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [showLoginModal, setShowLoginModal] = useState(false);
-  const [showRegisterModal, setShowRegisterModal] = useState(false);
   const pathname = usePathname();
   const { isAuthenticated } = useAppSelector((state) => state.auth);
+  
+  // Sync wallet state with Redux
+  useWalletSync();
 
   const toggleMobileMenu = () => {
     setIsMobileMenuOpen(!isMobileMenuOpen);
@@ -63,24 +63,7 @@ export default function Header() {
 
 
         <div className="flex items-center gap-2 sm:gap-3">
-          {isAuthenticated ? (
-            <UserMenu />
-          ) : (
-            <>
-              <button
-                onClick={() => setShowLoginModal(true)}
-                className="px-3 sm:px-4 h-8 sm:h-10 text-white hover:text-white/80 text-xs sm:text-sm font-medium font-mono transition-colors cursor-pointer hidden sm:inline"
-              >
-                Login
-              </button>
-              <button
-                onClick={() => setShowRegisterModal(true)}
-                className="px-3 sm:px-6 h-8 sm:h-10 bg-white hover:bg-gray-100 rounded-[8px] text-xs sm:text-sm font-medium font-mono transition-colors cursor-pointer"
-              >
-                <span className="text-black">Sign Up</span>
-              </button>
-            </>
-          )}
+          <WalletButton />
 
           <button 
             onClick={toggleMobileMenu}
@@ -118,40 +101,9 @@ export default function Header() {
               ))}
             </ul>
 
-            {!isAuthenticated && (
-              <div className="flex flex-col gap-3 pt-4 border-t border-white/10 sm:hidden">
-                <button
-                  onClick={() => {
-                    setShowLoginModal(true);
-                    setIsMobileMenuOpen(false);
-                  }}
-                  className="px-4 py-2 text-white text-[14px] font-medium font-mono hover:bg-white/10 rounded-[8px] transition-colors text-center"
-                >
-                  Login
-                </button>
-              </div>
-            )}
           </div>
         </div>
       )}
-
-      <LoginModal
-        isOpen={showLoginModal}
-        onClose={() => setShowLoginModal(false)}
-        onSwitchToRegister={() => {
-          setShowLoginModal(false);
-          setShowRegisterModal(true);
-        }}
-      />
-
-      <RegisterModal
-        isOpen={showRegisterModal}
-        onClose={() => setShowRegisterModal(false)}
-        onSwitchToLogin={() => {
-          setShowRegisterModal(false);
-          setShowLoginModal(true);
-        }}
-      />
     </header>
   );
 }

@@ -179,6 +179,7 @@ export interface LeaderboardDataSource {
 export interface SourceConfig {
   source: MarketSource;
   restEndpoint?: string;
+  clobEndpoint?: string; // For Polymarket CLOB API
   wsEndpoint?: string;
   graphqlEndpoint?: string;
   apiKey?: string;
@@ -226,6 +227,20 @@ export interface IndexerConfig {
     defaultInterval: number;
     priceUpdateInterval: number;
     leaderboardInterval: number;
+    tiered: {
+      highVolume: {
+        threshold: number;
+        interval: number;
+      };
+      mediumVolume: {
+        threshold: number;
+        interval: number;
+      };
+      lowVolume: {
+        threshold: number;
+        interval: number;
+      };
+    };
   };
   deduplication: {
     enabled: boolean;

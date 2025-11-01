@@ -2,14 +2,15 @@
 
 import { Provider } from 'react-redux';
 import { store } from '../store';
-import { useEffect } from 'react';
-import { initializeAuth } from '../store/slices/authSlice';
+import WalletProvider from './wallet/WalletProvider';
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  useEffect(() => {
-    store.dispatch(initializeAuth());
-  }, []);
-
-  return <Provider store={store}>{children}</Provider>;
+  return (
+    <Provider store={store}>
+      <WalletProvider>
+        {children}
+      </WalletProvider>
+    </Provider>
+  );
 }
 

@@ -129,6 +129,9 @@ model SourceMarket {
   source          MarketSource
   sourceMarketId  String        // ID from the source platform (condition_id for Polymarket)
   tokenId         String?       // Token ID for trading (token_id for Polymarket CLOB)
+  clobTokenIds    Json?         // Array of CLOB token IDs for Polymarket (for multi-outcome markets)
+  volumeTier      String?       // 'HIGH', 'MEDIUM', 'LOW' for polling priority
+  lastPriceUpdate DateTime?     // Track when prices were last fetched
   sourceData      Json          // Raw data from source
   isActive        Boolean       @default(true)
   createdAt       DateTime      @default(now())
@@ -140,6 +143,8 @@ model SourceMarket {
   @@unique([source, sourceMarketId])
   @@index([marketId])
   @@index([source])
+  @@index([volumeTier])
+  @@index([isActive])
 }
 
 // Market outcomes/options

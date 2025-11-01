@@ -13,15 +13,26 @@ export enum MarketSource {
   OMEN = 'OMEN',
 }
 
+export interface OutcomePrice {
+  source: MarketSource;
+  price: number;
+  volume?: number;
+  liquidity?: number;
+  timestamp: string;
+}
+
 export interface MarketOutcome {
   id: string;
   title: string;
   description?: string;
   index: number;
-  currentPrice?: number;
+  currentPrice?: number; // Best price (deprecated, use bestPrice)
   currentVolume?: number;
   currentLiquidity?: number;
   isWinning?: boolean;
+  prices?: OutcomePrice[]; // Per-source prices
+  bestPrice?: number; // Best price across sources
+  bestPriceSource?: MarketSource; // Source with best price
 }
 
 export interface SourceMarket {

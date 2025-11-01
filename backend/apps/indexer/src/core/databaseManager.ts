@@ -22,9 +22,21 @@ export class DatabaseManager {
   private readonly logger = logger.child({ component: 'databaseManager' });
 
   /**
-   * Store or update a market in the database
+   * Calculate volume tier for polling frequency
    */
-  async storeMarket(normalizedMarket: NormalizedMarket): Promise<string> {
+  private calculateVolumeTier(volume?: number): string {
+    if (!volume) return 'LOW';
+    if (volume >= config.polling.tiered.highVolume.threshold) return 'HIGH';
+    if (volume >= config.polling.tiered.mediumVolume.threshold) return 'MEDIUM';
+    return 'LOW';
+  }
+
+  /**
+   * Store or update a market in the database
+   * @param normalizedMarket The normalized market data
+   * @param canonicalMarketId Optional canonical market ID to link to (from deduplication)
+   */
+  async storeMarket(normalizedMarket: NormalizedMarket, canonicalMarketId?: string): Promise<string> {
     try {
       const { sourceMarketId, source, marketData } = normalizedMarket;
 
@@ -49,87 +61,70 @@ export class DatabaseManager {
         await this.updateMarket(marketId, marketData);
         
         // Update source market data
+        const volumeTier = this.calculateVolumeTier(marketData.totalVolume);
         await prisma.sourceMarket.update({
           where: { id: existingSourceMarket.id },
           data: {
             tokenId: marketData.token_id || null, // Update token_id for Polymarket
+            clobTokenIds: (marketData as any).clobTokenIds || null, // Store CLOB token IDs
+            volumeTier,
+            isActive: marketData.status === MarketStatus.ACTIVE,
             sourceData: marketData as any,
             updatedAt: new Date(),
           },
         });
       } else {
-        // Create new market
-        const market = await prisma.market.create({
-          data: {
-            title: marketData.title,
-            description: marketData.description,
-            category: marketData.category,
-            tags: marketData.tags || [],
-            endDate: marketData.endDate,
-            resolutionDate: marketData.resolutionDate,
-            status: marketData.status,
-            totalVolume: marketData.totalVolume ? new Prisma.Decimal(marketData.totalVolume) : null,
-            totalLiquidity: marketData.totalLiquidity ? new Prisma.Decimal(marketData.totalLiquidity) : null,
-            participantCount: marketData.participantCount,
-            resolvedOutcome: marketData.resolvedOutcome,
-            resolutionSource: marketData.resolutionSource,
-          },
-        });
-
-        marketId = market.id;
-
-        // Create source market link (check if it already exists)
-        const existingSourceMarket = await prisma.sourceMarket.findUnique({
-          where: {
-            source_sourceMarketId: {
-              source,
-              sourceMarketId,
-            },
-          },
-        });
-
-        if (!existingSourceMarket) {
-          await prisma.sourceMarket.create({
-            data: {
-              marketId,
-              source,
-              sourceMarketId,
-              tokenId: marketData.token_id || null, // Store token_id for Polymarket
-              sourceData: marketData as any,
-            },
+        // Check if we should link to a canonical market (from deduplication)
+        if (canonicalMarketId) {
+          // Verify canonical market exists
+          const canonicalMarket = await prisma.market.findUnique({
+            where: { id: canonicalMarketId },
+            include: { outcomes: true, sourceMarkets: true },
           });
-        } else {
-          // Update existing source market with new data
-          await prisma.sourceMarket.update({
-            where: {
-              source_sourceMarketId: {
+
+          if (canonicalMarket) {
+            // Link to canonical market instead of creating new one
+            marketId = canonicalMarketId;
+            
+            this.logger.info('Linking to canonical market', {
+              canonicalMarketId,
+              source,
+              sourceMarketId,
+              title: marketData.title,
+            });
+
+            // Aggregate market data from multiple sources
+            await this.aggregateMarketData(marketId, marketData);
+
+            // Merge outcomes - match by title/index or create missing ones
+            await this.mergeOutcomes(marketId, marketData.outcomes || []);
+
+            // Create source market link
+            const volumeTier = this.calculateVolumeTier(marketData.totalVolume);
+            await prisma.sourceMarket.create({
+              data: {
+                marketId,
                 source,
                 sourceMarketId,
+                tokenId: marketData.token_id || null,
+                clobTokenIds: (marketData as any).clobTokenIds || null,
+                volumeTier,
+                isActive: marketData.status === MarketStatus.ACTIVE,
+                sourceData: marketData as any,
               },
-            },
-            data: {
-              marketId,
-              tokenId: marketData.token_id || null, // Update token_id for Polymarket
-              sourceData: marketData as any,
-              updatedAt: new Date(),
-            },
-          });
-        }
-
-        // Create market outcomes
-        if (marketData.outcomes?.length) {
-          await prisma.marketOutcome.createMany({
-            data: marketData.outcomes.map(outcome => ({
-              marketId,
-              title: outcome.title,
-              description: outcome.description,
-              index: outcome.index,
-              currentPrice: outcome.currentPrice ? new Prisma.Decimal(outcome.currentPrice) : null,
-              currentVolume: outcome.currentVolume ? new Prisma.Decimal(outcome.currentVolume) : null,
-              currentLiquidity: outcome.currentLiquidity ? new Prisma.Decimal(outcome.currentLiquidity) : null,
-              isWinning: outcome.isWinning,
-            })),
-          });
+            });
+          } else {
+            // Canonical market not found, create new market
+            this.logger.warn('Canonical market not found, creating new market', {
+              canonicalMarketId,
+              source,
+              sourceMarketId,
+            });
+            marketId = await this.createNewMarket(normalizedMarket);
+          }
+        } else {
+          // No canonical market specified, create new market
+          marketId = await this.createNewMarket(normalizedMarket);
         }
       }
 
@@ -148,6 +143,171 @@ export class DatabaseManager {
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;
+    }
+  }
+
+  /**
+   * Create a new market in the database
+   */
+  private async createNewMarket(normalizedMarket: NormalizedMarket): Promise<string> {
+    const { sourceMarketId, source, marketData } = normalizedMarket;
+
+    const market = await prisma.market.create({
+      data: {
+        title: marketData.title,
+        description: marketData.description,
+        category: marketData.category,
+        tags: marketData.tags || [],
+        endDate: marketData.endDate,
+        resolutionDate: marketData.resolutionDate,
+        status: marketData.status,
+        totalVolume: marketData.totalVolume ? new Prisma.Decimal(marketData.totalVolume) : null,
+        totalLiquidity: marketData.totalLiquidity ? new Prisma.Decimal(marketData.totalLiquidity) : null,
+        participantCount: marketData.participantCount,
+        resolvedOutcome: marketData.resolvedOutcome,
+        resolutionSource: marketData.resolutionSource,
+      },
+    });
+
+    const marketId = market.id;
+
+    // Create source market link
+    const volumeTier = this.calculateVolumeTier(marketData.totalVolume);
+    await prisma.sourceMarket.create({
+      data: {
+        marketId,
+        source,
+        sourceMarketId,
+        tokenId: marketData.token_id || null,
+        clobTokenIds: (marketData as any).clobTokenIds || null,
+        volumeTier,
+        isActive: marketData.status === MarketStatus.ACTIVE,
+        sourceData: marketData as any,
+      },
+    });
+
+    // Create market outcomes
+    if (marketData.outcomes?.length) {
+      await prisma.marketOutcome.createMany({
+        data: marketData.outcomes.map(outcome => ({
+          marketId,
+          title: outcome.title,
+          description: outcome.description,
+          index: outcome.index,
+          currentPrice: outcome.currentPrice ? new Prisma.Decimal(outcome.currentPrice) : null,
+          currentVolume: outcome.currentVolume ? new Prisma.Decimal(outcome.currentVolume) : null,
+          currentLiquidity: outcome.currentLiquidity ? new Prisma.Decimal(outcome.currentLiquidity) : null,
+          isWinning: outcome.isWinning,
+        })),
+      });
+    }
+
+    return marketId;
+  }
+
+  /**
+   * Aggregate market data from multiple sources
+   */
+  private async aggregateMarketData(marketId: string, newMarketData: MarketData): Promise<void> {
+    // Get the canonical market with all source markets
+    const market = await prisma.market.findUnique({
+      where: { id: marketId },
+      include: { sourceMarkets: true },
+    });
+
+    if (!market) {
+      this.logger.warn('Market not found for aggregation', { marketId });
+      return;
+    }
+
+    // Calculate aggregated values starting with new market data
+    let totalVolume = newMarketData.totalVolume ?? 0;
+    let totalLiquidity = newMarketData.totalLiquidity ?? 0;
+    let totalParticipants = newMarketData.participantCount ?? 0;
+
+    // Add existing market data
+    if (market.totalVolume) {
+      totalVolume += parseFloat(market.totalVolume.toString());
+    }
+    if (market.totalLiquidity) {
+      totalLiquidity += parseFloat(market.totalLiquidity.toString());
+    }
+    if (market.participantCount) {
+      totalParticipants += market.participantCount;
+    }
+
+    // Also sum from source data (if stored in sourceData)
+    // We could parse sourceData for each sourceMarket, but for now just use market-level aggregation
+    
+    // Update market with aggregated data
+    await prisma.market.update({
+      where: { id: marketId },
+      data: {
+        totalVolume: new Prisma.Decimal(totalVolume),
+        totalLiquidity: new Prisma.Decimal(totalLiquidity),
+        participantCount: totalParticipants,
+        updatedAt: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Merge outcomes from new source into canonical market
+   * Matches outcomes by title/index, creates missing ones
+   */
+  private async mergeOutcomes(marketId: string, newOutcomes: any[]): Promise<void> {
+    // Get existing outcomes for the canonical market
+    const existingOutcomes = await prisma.marketOutcome.findMany({
+      where: { marketId },
+      orderBy: { index: 'asc' },
+    });
+
+    for (const newOutcome of newOutcomes) {
+      // Try to find matching outcome by index first
+      let matchedOutcome = existingOutcomes.find(ex => ex.index === newOutcome.index);
+
+      // If no match by index, try to match by title (fuzzy match)
+      if (!matchedOutcome) {
+        matchedOutcome = existingOutcomes.find(ex => {
+          const exTitle = ex.title.toLowerCase().trim();
+          const newTitle = newOutcome.title.toLowerCase().trim();
+          return exTitle === newTitle || 
+                 exTitle.includes(newTitle) || 
+                 newTitle.includes(exTitle);
+        });
+      }
+
+      if (matchedOutcome) {
+        // Update existing outcome - keep existing price but update if new one is better
+        // Note: We don't update price here as it's stored per-source in PriceHistory
+        await prisma.marketOutcome.update({
+          where: { id: matchedOutcome.id },
+          data: {
+            title: matchedOutcome.title, // Keep original title
+            description: matchedOutcome.description || newOutcome.description,
+            updatedAt: new Date(),
+          },
+        });
+      } else {
+        // Create new outcome if it doesn't exist
+        // Find next available index
+        const maxIndex = existingOutcomes.length > 0
+          ? Math.max(...existingOutcomes.map(ex => ex.index))
+          : -1;
+        
+        await prisma.marketOutcome.create({
+          data: {
+            marketId,
+            title: newOutcome.title,
+            description: newOutcome.description,
+            index: maxIndex + 1,
+            currentPrice: newOutcome.currentPrice ? new Prisma.Decimal(newOutcome.currentPrice) : null,
+            currentVolume: newOutcome.currentVolume ? new Prisma.Decimal(newOutcome.currentVolume) : null,
+            currentLiquidity: newOutcome.currentLiquidity ? new Prisma.Decimal(newOutcome.currentLiquidity) : null,
+            isWinning: newOutcome.isWinning,
+          },
+        });
+      }
     }
   }
 
