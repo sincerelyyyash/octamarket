@@ -1,86 +1,110 @@
-import { config } from '../config/index.js';
 import { logger } from './logger.js';
 
-interface RateLimitState {
-  requests: number[];
-  lastReset: number;
+/**
+ * Rate limiter configuration
+ */
+interface RateLimiterConfig {
+  maxRequests: number;
+  windowMs: number;
+  minDelayMs?: number;
 }
 
-class RateLimiter {
-  private state: Map<string, RateLimitState> = new Map();
-  private readonly logger = logger.child({ component: 'rateLimiter' });
+/**
+ * Request record for tracking
+ */
+interface RequestRecord {
+  timestamp: number;
+  count: number;
+}
 
-  async waitForSlot(service: string): Promise<void> {
-    const limits = config.rateLimiting.thegraph;
-    if (!limits.enabled) return;
+/**
+ * Rate limiter to prevent exceeding API limits
+ */
+export class RateLimiter {
+  private requests: Map<string, RequestRecord[]> = new Map();
+  private config: RateLimiterConfig;
 
+  constructor(config: RateLimiterConfig) {
+    this.config = {
+      minDelayMs: 100,
+      ...config,
+    };
+  }
+
+  /**
+   * Wait for rate limit clearance before proceeding
+   */
+  async acquire(key: string = 'default'): Promise<void> {
     const now = Date.now();
-    const minute = Math.floor(now / 60000);
-    const hour = Math.floor(now / 3600000);
+    const windowStart = now - this.config.windowMs;
 
-    // Get or create state for this service
-    let state = this.state.get(service);
-    if (!state) {
-      state = { requests: [], lastReset: now };
-      this.state.set(service, state);
-    }
+    // Get or initialize request records for this key
+    let records = this.requests.get(key) || [];
 
-    // Clean old requests (older than 1 hour)
-    const hourAgo = now - 3600000;
-    state.requests = state.requests.filter(timestamp => timestamp > hourAgo);
+    // Clean up old records outside the window
+    records = records.filter(r => r.timestamp > windowStart);
 
-    // Check hourly limit
-    if (state.requests.length >= limits.requestsPerHour) {
-      const oldestRequest = Math.min(...state.requests);
-      const waitTime = oldestRequest + 3600000 - now;
-      this.logger.warn('Rate limit exceeded (hourly)', {
-        service,
-        requests: state.requests.length,
-        limit: limits.requestsPerHour,
-        waitTime: Math.ceil(waitTime / 1000),
+    // Count total requests in window
+    const totalRequests = records.reduce((sum, r) => sum + r.count, 0);
+
+    if (totalRequests >= this.config.maxRequests) {
+      // Calculate wait time until oldest request expires
+      const oldestTimestamp = records[0]?.timestamp || now;
+      const waitMs = Math.max(
+        oldestTimestamp + this.config.windowMs - now,
+        this.config.minDelayMs || 0
+      );
+
+      logger.debug(`Rate limit reached for ${key}, waiting ${waitMs}ms`, {
+        totalRequests,
+        maxRequests: this.config.maxRequests,
       });
-      await this.sleep(waitTime);
-      return this.waitForSlot(service);
+
+      await this.sleep(waitMs);
+      return this.acquire(key); // Recursive retry
     }
 
-    // Check minute limit
-    const minuteAgo = now - 60000;
-    const recentRequests = state.requests.filter(timestamp => timestamp > minuteAgo);
-    
-    if (recentRequests.length >= limits.requestsPerMinute) {
-      const oldestRecentRequest = Math.min(...recentRequests);
-      const waitTime = oldestRecentRequest + 60000 - now;
-      this.logger.warn('Rate limit exceeded (minute)', {
-        service,
-        requests: recentRequests.length,
-        limit: limits.requestsPerMinute,
-        waitTime: Math.ceil(waitTime / 1000),
-      });
-      await this.sleep(waitTime);
-      return this.waitForSlot(service);
-    }
+    // Add current request
+    records.push({ timestamp: now, count: 1 });
+    this.requests.set(key, records);
 
-    // Record this request
-    state.requests.push(now);
+    // Apply minimum delay between requests
+    if (this.config.minDelayMs && this.config.minDelayMs > 0) {
+      await this.sleep(this.config.minDelayMs);
+    }
+  }
+
+  /**
+   * Reset rate limiter for a specific key
+   */
+  reset(key: string = 'default'): void {
+    this.requests.delete(key);
+  }
+
+  /**
+   * Reset all rate limiters
+   */
+  resetAll(): void {
+    this.requests.clear();
   }
 
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
-
-  getStats(service: string): { requestsLastMinute: number; requestsLastHour: number } {
-    const state = this.state.get(service);
-    if (!state) return { requestsLastMinute: 0, requestsLastHour: 0 };
-
-    const now = Date.now();
-    const minuteAgo = now - 60000;
-    const hourAgo = now - 3600000;
-
-    return {
-      requestsLastMinute: state.requests.filter(t => t > minuteAgo).length,
-      requestsLastHour: state.requests.filter(t => t > hourAgo).length,
-    };
-  }
 }
 
-export const rateLimiter = new RateLimiter();
+/**
+ * Default rate limiters for different services
+ */
+export const polymarketRateLimiter = new RateLimiter({
+  maxRequests: 100,
+  windowMs: 60000, // 100 requests per minute
+  minDelayMs: 100,
+});
+
+export const kalshiRateLimiter = new RateLimiter({
+  maxRequests: 60,
+  windowMs: 60000, // 60 requests per minute
+  minDelayMs: 500,
+});
+

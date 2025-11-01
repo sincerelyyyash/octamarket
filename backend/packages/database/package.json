@@ -12,7 +12,6 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:seed": "tsx src/seed.ts",
-    "db:clear": "FORCE_CLEAR=true tsx scripts/clear-all.ts",
     "dev": "tsup src/* --watch",
     "format": "prisma format",
     "generate": "prisma generate",
